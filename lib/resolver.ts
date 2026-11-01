@@ -8,6 +8,8 @@ const RESOLVE_TIMEOUT_MS = 6000;
 const PROBE_TIMEOUT_MS = 5000;
 const HLS_DEADLINE_MS = 12000;
 const PARALLEL_DEADLINE_MS = 15000;
+const MP4_SETTLE_GRACE_MS = 350;
+const HLS_GRACE_MS = 1200;
 
 export type HlsSession = {
   masterUrl: string;
@@ -44,6 +46,30 @@ const sessions: Map<string, StreamSession> = (g.__onepaceSessions ??= new Map())
 
 const WATCH_TTL = 10 * 60 * 1000;
 const SESSION_TTL = 10 * 60 * 1000;
+
+/**
+ * Merge a partial result into the cached session instead of overwriting it.
+ * The HLS and MP4 branches resolve concurrently and each owns a different
+ * half of the session, so a blind `sessions.set` would drop whichever half
+ * landed first. An empty patch never clears a value we already know works.
+ */
+function updateSession(key: string, patch: Partial<StreamSession>): StreamSession {
+  const cur = sessions.get(key);
+  const notes = [...new Set([...(cur?.notes ?? []), ...(patch.notes ?? [])])];
+  const mp4 = patch.mp4 && Object.keys(patch.mp4).length > 0 ? patch.mp4 : cur?.mp4 ?? {};
+  const hlsExtra = patch.hlsExtra && patch.hlsExtra.length > 0 ? patch.hlsExtra : cur?.hlsExtra ?? [];
+  const session: StreamSession = {
+    episodeId: patch.episodeId ?? cur?.episodeId ?? 0,
+    seriesId: patch.seriesId ?? cur?.seriesId ?? 0,
+    resolvedAt: patch.resolvedAt ?? Date.now(),
+    hls: patch.hls ?? cur?.hls ?? null,
+    mp4,
+    hlsExtra,
+    notes,
+  };
+  sessions.set(key, session);
+  return session;
+}
 
 export async function getWatchSources(postId: number, episodeId: number, force = false): Promise<WatchResp> {
   const key = `${postId}:${episodeId}`;
@@ -136,19 +162,25 @@ function hostVariants(master: string) {
 }
 
 async function fetchPlaylist(url: string): Promise<string | null> {
-  try {
-    const text = await fetchText(url);
-    return text.includes("#EXTM3U") ? text : null;
-  } catch {}
-  try {
-    const text = await fetchViaWorker(url);
-    return text.includes("#EXTM3U") ? text : null;
-  } catch {}
-  return null;
+  const attempt = async (fn: () => Promise<string>): Promise<string | null> => {
+    try {
+      const text = await fn();
+      return text.includes("#EXTM3U") ? text : null;
+    } catch {
+      return null;
+    }
+  };
+  // Probe the origin and the worker together: whichever answers with a
+  // playlist first wins, and a rejected host no longer waits on the other.
+  const direct = attempt(() => fetchText(url));
+  const worker = attempt(() => fetchViaWorker(url));
+  return Promise.race([
+    direct.then((t) => t ?? worker),
+    worker.then((t) => t ?? direct),
+  ]);
 }
 
 async function resolveHls(embed: string, notes: string[]): Promise<HlsSession | null> {
-  const deadline = Date.now() + HLS_DEADLINE_MS;
   let upstream: string | null = null;
   try {
     const page = await fetchText(embed, `${SITE}/`);
@@ -163,34 +195,48 @@ async function resolveHls(embed: string, notes: string[]): Promise<HlsSession | 
     return null;
   }
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (Date.now() > deadline) break;
+  const attempt = async (): Promise<HlsSession | null> => {
     let vpage = "";
     try {
       vpage = await fetchText(upstream!, embed);
     } catch {
       try {
         vpage = await fetchViaWorker(upstream!, embed);
-      } catch (inner: unknown) {
-        notes.push(`vidmoly page: ${errorMessage(inner)}`);
-        await new Promise((r) => setTimeout(r, 200));
-        continue;
+      } catch {
+        return null;
       }
     }
     const masters = vpage.match(/https:\/\/[^"']+master\.m3u8[^"']*/g) || [];
     const primary = masters[0];
-    if (primary) {
-      // Probe the primary and its host variants together: the CDN often
-      // rejects one host while a sibling serves the same token fine.
-      const candidates = [primary, ...hostVariants(primary).slice(1), ...masters.slice(1)];
-      const probed = await Promise.all(candidates.map((c) => fetchPlaylist(c)));
-      const idx = probed.findIndex((t) => t !== null);
-      if (idx >= 0) return { masterUrl: candidates[idx] };
-    }
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 200));
+    if (!primary) return null;
+    // Probe the primary and its host variants together: the CDN often
+    // rejects one host while a sibling serves the same token fine.
+    const candidates = [primary, ...hostVariants(primary).slice(1), ...masters.slice(1)];
+    const probed = await Promise.all(candidates.map((c) => fetchPlaylist(c)));
+    const idx = probed.findIndex((t) => t !== null);
+    return idx >= 0 ? { masterUrl: candidates[idx] } : null;
+  };
+
+  // Each pass over the player page yields a fresh playback token, so probe
+  // a couple of them at once instead of retrying one after another.
+  let settle: ((v: HlsSession | null) => void) | undefined;
+  const firstOk = new Promise<HlsSession | null>((resolve) => {
+    settle = resolve;
+  });
+  const attempts = [attempt(), attempt()];
+  for (const p of attempts) {
+    void p.then((v) => {
+      if (v) settle?.(v);
+    });
   }
-  notes.push("vidmoly: no working master");
-  return null;
+
+  const result = await Promise.race([
+    firstOk,
+    Promise.all(attempts).then((vals) => vals.find((v) => v !== null) ?? null),
+    new Promise<HlsSession | null>((r) => setTimeout(() => r(null), HLS_DEADLINE_MS)),
+  ]);
+  if (!result) notes.push("vidmoly: no working master");
+  return result;
 }
 
 async function resolveNeo(embed: string, notes: string[]): Promise<{ mp4: Record<string, string>; hls: HlsCandidate[] }> {
@@ -217,17 +263,38 @@ async function resolveNeo(embed: string, notes: string[]): Promise<{ mp4: Record
     return { mp4, hls };
   }
   const entries = (payload.sources || []).filter((s) => s.url);
-  const probed = await Promise.all(
-    entries.map(async (s) => ({ type: s.type, url: s.url, alive: await probeRange(s.url) }))
-  );
-  for (const p of probed) {
-    if (!p.alive) continue;
-    if (isPlaylistUrl(p.url)) {
-      hls.push({ url: p.url, kind: "master", server: "NeoCDN" });
+
+  // Probe every rendition in parallel and record each one as it answers, so
+  // a dead tunnel cannot hold back a sibling that is already serving.
+  let settleProbe: (() => void) | undefined;
+  const firstAlive = new Promise<void>((resolve) => {
+    settleProbe = resolve;
+  });
+
+  const probes = entries.map(async (s) => {
+    const ok = await probeRange(s.url);
+    if (!ok) return;
+    if (isPlaylistUrl(s.url)) {
+      hls.push({ url: s.url, kind: "master", server: "NeoCDN" });
     } else {
-      mp4[p.type] = p.url;
+      mp4[s.type] = s.url;
     }
-  }
+    settleProbe?.();
+  });
+
+  await Promise.race([
+    firstAlive,
+    Promise.all(probes).then(() => undefined),
+    new Promise((r) => setTimeout(r, MP4_SETTLE_GRACE_MS)),
+  ]);
+
+  // Collect the renditions that land right after the first, but do not wait
+  // on a dead one for the full probe timeout.
+  await Promise.race([
+    Promise.all(probes),
+    new Promise((r) => setTimeout(r, MP4_SETTLE_GRACE_MS)),
+  ]);
+
   if (Object.keys(mp4).length === 0 && hls.length === 0 && entries.length > 0) {
     for (const s of entries.slice(0, 3)) {
       if (isPlaylistUrl(s.url)) {
@@ -344,20 +411,43 @@ export async function resolveHlsSession(episodeId: number, seriesId: number, for
     notes.push("vidmoly: no source");
   }
 
-  const session: StreamSession = {
+  const session = updateSession(key, {
     episodeId,
     seriesId,
     resolvedAt: Date.now(),
     hls,
-    mp4: hit?.mp4 ?? {},
-    hlsExtra: hit?.hlsExtra ?? [],
     notes,
-  };
-  sessions.set(key, session);
-  return session;
+  });
+  return { episodeId, seriesId, resolvedAt: session.resolvedAt, hls, notes };
 }
 
 const MP4_SERVERS = ["VidStream", "HydraX", "MirrorBot", "SRuby", "Omega", "Vidcloud", "Pixel", "VidSrc"];
+
+/**
+ * Resolve one MP4 source. Returns the renditions it exposes plus any
+ * playlist URLs it advertises.
+ */
+async function resolveMp4Source(
+  source: WatchSource,
+  notes: string[]
+): Promise<{ mp4: Record<string, string>; hls: HlsCandidate[] }> {
+  try {
+    if (source.server === "NeoCDN") return await resolveNeo(source.embed, notes);
+    if (source.server === "VidStream" || source.server === "HydraX") {
+      const urls = source.server === "VidStream"
+        ? await resolveVidStream(source.embed, notes)
+        : await resolveHydraX(source.embed, notes);
+      return {
+        mp4: {} as Record<string, string>,
+        hls: urls.map((u) => ({ url: u, kind: "media" as const, server: source.server })),
+      };
+    }
+    return { mp4: await resolveGenericMp4(source.embed), hls: [] as HlsCandidate[] };
+  } catch (e: unknown) {
+    notes.push(`${source.server}: ${errorMessage(e)}`);
+    return { mp4: {} as Record<string, string>, hls: [] as HlsCandidate[] };
+  }
+}
 
 export async function resolveMp4Session(episodeId: number, seriesId: number, force = false): Promise<Mp4Resolve> {
   const key = `${seriesId}:${episodeId}`;
@@ -370,57 +460,82 @@ export async function resolveMp4Session(episodeId: number, seriesId: number, for
   const watch = await getWatchSources(seriesId, episodeId, force);
   const found = watch.sources.filter((s) => s.server === "NeoCDN" || MP4_SERVERS.some((n) => s.server.startsWith(n)));
 
-  const results = await Promise.all(
-    found.map(async (source) => {
-      try {
-        if (source.server === "NeoCDN") return { source, value: await resolveNeo(source.embed, notes) };
-        if (source.server === "VidStream" || source.server === "HydraX") {
-          const urls = source.server === "VidStream"
-            ? await resolveVidStream(source.embed, notes)
-            : await resolveHydraX(source.embed, notes);
-          return {
-            source,
-            value: {
-              mp4: {} as Record<string, string>,
-              hls: urls.map((u) => ({ url: u, kind: "media" as const, server: source.server })),
-            },
-          };
-        }
-        return { source, value: { mp4: await resolveGenericMp4(source.embed), hls: [] as HlsCandidate[] } };
-      } catch (e: unknown) {
-        notes.push(`${source.server}: ${errorMessage(e)}`);
-        return { source, value: { mp4: {} as Record<string, string>, hls: [] as HlsCandidate[] } };
-      }
-    })
-  );
-
   const mp4: Record<string, string> = {};
   const hlsExtra: HlsCandidate[] = [];
-  for (const { source, value } of results) {
+  const absorbed = new Set<string>();
+
+  const absorb = (source: WatchSource, value: { mp4: Record<string, string>; hls: HlsCandidate[] }) => {
+    if (absorbed.has(source.embed)) return;
+    absorbed.add(source.embed);
     if (source.server === "NeoCDN") {
       Object.assign(mp4, value.mp4);
       hlsExtra.push(...value.hls);
-      continue;
+      return;
     }
     if (value.hls.length > 0 && !hlsExtra.some((h) => h.server === source.server)) {
       hlsExtra.push(...value.hls);
-      continue;
+      return;
     }
-    if (Object.keys(value.mp4).length === 0) continue;
+    if (Object.keys(value.mp4).length === 0) return;
     if (!mp4["720p"]) mp4["720p"] = value.mp4["720p"] ?? Object.values(value.mp4)[0];
+  };
+
+  // Resolve every source concurrently, but do not wait for all of them:
+  // servers whose player page never exposes a direct URL would otherwise
+  // hold the response hostage for the full timeout of the slowest one.
+  // The first source that yields a usable rendition wins, with a short
+  // grace window so a second fast source can still contribute.
+  let settle: (() => void) | undefined;
+  let gotUsable = false;
+  const firstUsable = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+
+  const tasks = found.map(async (source) => {
+    const value = await resolveMp4Source(source, notes);
+    const usable = Object.keys(value.mp4).length > 0 || value.hls.length > 0;
+    if (!usable) return;
+    absorb(source, value);
+    gotUsable = true;
+    settle?.();
+  });
+
+  await Promise.race([
+    firstUsable,
+    Promise.all(tasks).then(() => undefined),
+  ]);
+
+  // Give concurrent sources a brief moment to land their own renditions.
+  if (gotUsable) {
+    await new Promise((r) => setTimeout(r, MP4_SETTLE_GRACE_MS));
   }
 
-  const session: StreamSession = {
+  // Sources that are still running keep filling the session cache in the
+  // background, so a later request can reuse their renditions without
+  // making this one wait for them.
+  void Promise.all(tasks).then(() => {
+    updateSession(key, { episodeId, seriesId, mp4, hlsExtra, notes });
+  });
+
+  const session = updateSession(key, {
     episodeId,
     seriesId,
     resolvedAt: Date.now(),
-    hls: hit?.hls ?? null,
     mp4,
     hlsExtra,
     notes,
+  });
+
+  // A forced re-resolve that comes back empty must not drop a rendition we
+  // already know works.
+  return {
+    episodeId,
+    seriesId,
+    resolvedAt: session.resolvedAt,
+    mp4: Object.keys(session.mp4).length > 0 ? session.mp4 : mp4,
+    hlsExtra: session.hlsExtra.length > 0 ? session.hlsExtra : hlsExtra,
+    notes,
   };
-  sessions.set(key, session);
-  return session;
 }
 
 export async function resolveSession(episodeId: number, seriesId: number, force = false): Promise<StreamSession> {
@@ -430,7 +545,7 @@ export async function resolveSession(episodeId: number, seriesId: number, force 
 
   const fast = await resolveHlsSession(episodeId, seriesId, force);
   const slow = await resolveMp4Session(episodeId, seriesId, force);
-  const merged: StreamSession = {
+  return updateSession(key, {
     episodeId,
     seriesId,
     resolvedAt: Date.now(),
@@ -438,9 +553,7 @@ export async function resolveSession(episodeId: number, seriesId: number, force 
     mp4: slow.mp4,
     hlsExtra: slow.hlsExtra,
     notes: [...fast.notes, ...slow.notes],
-  };
-  sessions.set(key, merged);
-  return merged;
+  });
 }
 
 export type ParallelResolve = {
@@ -503,18 +616,29 @@ export async function resolveParallel(
   ]).catch(() => undefined);
   if (timer) clearTimeout(timer);
 
+  // HLS is the preferred source, so when MP4 wins the race give a still
+  // running HLS branch a brief moment to land rather than dropping it.
+  if (!box.hls?.ok) {
+    await Promise.race([
+      hlsDone.then(() => undefined),
+      new Promise((r) => setTimeout(r, HLS_GRACE_MS)),
+    ]);
+  }
+
   const hlsResult = box.hls;
   const mp4Result = box.mp4;
   const notes = [...(hlsResult?.notes ?? []), ...(mp4Result?.notes ?? [])];
 
   // The individual resolvers merge their fields into the shared session as
-  // they land, so no extra write is needed here.
+  // they land, so read the merged view to pick up a branch that finished
+  // just after the race was won.
+  const merged = sessions.get(`${seriesId}:${episodeId}`);
   return {
     episodeId,
     seriesId,
-    hls: hlsResult?.hls ?? null,
-    mp4: mp4Result?.mp4 ?? {},
-    hlsExtra: mp4Result?.hlsExtra ?? [],
+    hls: hlsResult?.hls ?? merged?.hls ?? null,
+    mp4: merged?.mp4 ?? mp4Result?.mp4 ?? {},
+    hlsExtra: merged?.hlsExtra ?? mp4Result?.hlsExtra ?? [],
     notes,
   };
 }
