@@ -277,7 +277,7 @@ async function resolveGenericMp4(embed: string): Promise<Record<string, string>>
   return out;
 }
 
-const RESOLVE_DEADLINE_MS = 45000;
+const RESOLVE_DEADLINE_MS = 20000;
 
 export async function resolveSession(episodeId: number, seriesId: number, force = false): Promise<StreamSession> {
   const key = `${seriesId}:${episodeId}`;

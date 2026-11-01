@@ -1,5 +1,3 @@
-import { createHmac } from "crypto";
-
 const SECRET = process.env.PROXY_SECRET || "onepace-proxy-dev";
 
 const allowlist = [
@@ -26,21 +24,54 @@ export type ProxyPayload =
   | { kind: "hls-seg"; ep: number; path: string; fallback?: string }
   | { kind: "url"; u: string };
 
-export function signPayload(payload: ProxyPayload, ttlSec = 30 * 24 * 3600) {
+function toBase64Url(bytes: Uint8Array) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromBase64Url(s: string) {
+  const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4));
+  const bin = atob(b64 + pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function hmacKey() {
+  return crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+}
+
+export async function signPayload(payload: ProxyPayload, ttlSec = 30 * 24 * 3600) {
   const exp = Math.floor(Date.now() / 1000) + ttlSec;
-  const body = Buffer.from(JSON.stringify({ ...payload, exp })).toString("base64url");
-  const sig = createHmac("sha256", SECRET).update(body).digest("base64url");
+  const body = toBase64Url(new TextEncoder().encode(JSON.stringify({ ...payload, exp })));
+  const key = await hmacKey();
+  const sig = toBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body))));
   return `${body}.${sig}`;
 }
 
-export function verifyPayload(t: string): ProxyPayload | null {
+export async function verifyPayload(t: string): Promise<ProxyPayload | null> {
   try {
-    const [body, sig] = t.split(".");
+    const dot = t.lastIndexOf(".");
+    if (dot <= 0) return null;
+    const body = t.slice(0, dot);
+    const sig = t.slice(dot + 1);
     if (!body || !sig) return null;
-    const expect = createHmac("sha256", SECRET).update(body).digest("base64url");
-    if (expect.length !== sig.length) return null;
-    if (!timingSafeEqual(expect, sig)) return null;
-    const data = JSON.parse(Buffer.from(body, "base64url").toString());
+    const key = await hmacKey();
+    const expected = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)));
+    const got = fromBase64Url(sig);
+    if (expected.length !== got.length) return null;
+    let diff = 0;
+    for (let i = 0; i < expected.length; i++) diff |= expected[i] ^ got[i];
+    if (diff !== 0) return null;
+    const data = JSON.parse(new TextDecoder().decode(fromBase64Url(body)));
     if (typeof data.exp !== "number" || data.exp < Math.floor(Date.now() / 1000)) return null;
     if (typeof data.u === "string") {
       if (!isAllowed(data.u)) return null;
@@ -56,11 +87,4 @@ export function verifyPayload(t: string): ProxyPayload | null {
   } catch {
     return null;
   }
-}
-
-function timingSafeEqual(a: string, b: string) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
 }

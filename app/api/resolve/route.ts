@@ -4,7 +4,8 @@ import { resolveSession } from "@/lib/resolver";
 import { signPayload } from "@/lib/proxy";
 import { errorMessage } from "@/lib/onepace";
 
-export const runtime = "nodejs";
+export const runtime = "edge";
+export const dynamic = "force-dynamic";
 
 const cache = new Map<string, { data: unknown; ts: number }>();
 const TTL = 5 * 60 * 1000;
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest) {
         type: "hls",
         quality: "900p",
         codec: "h264",
-        proxyUrl: `/api/proxy/hls?t=${signPayload({ ep: ep.id, kind: "hls-master" })}`,
+        proxyUrl: `/api/proxy/hls?t=${await signPayload({ ep: ep.id, kind: "hls-master" })}`,
       });
     }
 
@@ -44,7 +45,7 @@ export async function GET(req: NextRequest) {
         type: "mp4",
         quality: q,
         codec: q === "1080p" ? "av1" : "h264",
-        proxyUrl: `/api/proxy/mp4?t=${signPayload({ ep: ep.id, kind: "mp4", q })}`,
+        proxyUrl: `/api/proxy/mp4?t=${await signPayload({ ep: ep.id, kind: "mp4", q })}`,
       });
     }
 

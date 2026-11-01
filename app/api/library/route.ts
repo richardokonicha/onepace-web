@@ -3,6 +3,7 @@ import { getLibrary } from "@/lib/library";
 import { errorMessage } from "@/lib/onepace";
 
 export const revalidate = 3600;
+export const runtime = "edge";
 
 export async function GET(req: NextRequest) {
   try {

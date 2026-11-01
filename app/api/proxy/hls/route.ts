@@ -3,7 +3,8 @@ import { signPayload, verifyPayload } from "@/lib/proxy";
 import { resolveSession } from "@/lib/resolver";
 import { errorMessage } from "@/lib/onepace";
 
-export const runtime = "nodejs";
+export const runtime = "edge";
+export const dynamic = "force-dynamic";
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
@@ -20,7 +21,7 @@ async function fetchText(url: string) {
 export async function GET(req: NextRequest) {
   const t = req.nextUrl.searchParams.get("t");
   if (!t) return NextResponse.json({ error: "missing t" }, { status: 400 });
-  const payload = verifyPayload(t);
+  const payload = await verifyPayload(t);
   if (!payload) return NextResponse.json({ error: "invalid or expired" }, { status: 403 });
   if (payload.kind !== "hls-master") return NextResponse.json({ error: "bad payload" }, { status: 400 });
 
@@ -52,14 +53,15 @@ export async function GET(req: NextRequest) {
   for (const line of lines) {
     if (line.startsWith("#EXT")) {
       if (line.includes("URI=\"")) {
-        out.push(
-          line.replace(/URI="([^"]+)"/g, (_, u) => {
-            const abs = new URL(u, masterUrl).href;
-            const path = new URL(abs).pathname;
-            const token = signPayload({ ep: payload.ep, kind: "hls-seg", path, fallback: abs });
-            return `URI="${origin}/api/proxy/hls/seg?t=${token}"`;
-          })
-        );
+        const replacements: string[] = [];
+        for (const match of line.matchAll(/URI="([^"]+)"/g)) {
+          const abs = new URL(match[1], masterUrl).href;
+          const path = new URL(abs).pathname;
+          const token = await signPayload({ ep: payload.ep, kind: "hls-seg", path, fallback: abs });
+          replacements.push(`URI="${origin}/api/proxy/hls/seg?t=${token}"`);
+        }
+        let idx = 0;
+        out.push(line.replace(/URI="[^"]+"/g, () => replacements[idx++]));
       } else {
         out.push(line);
       }
@@ -72,7 +74,7 @@ export async function GET(req: NextRequest) {
     }
     const abs = new URL(trimmed, masterUrl).href;
     const path = new URL(abs).pathname;
-    const token = signPayload({ ep: payload.ep, kind: "hls-seg", path, fallback: abs });
+    const token = await signPayload({ ep: payload.ep, kind: "hls-seg", path, fallback: abs });
     out.push(`${origin}/api/proxy/hls/seg?t=${token}`);
   }
 
