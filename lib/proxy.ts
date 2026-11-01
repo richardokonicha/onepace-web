@@ -19,9 +19,10 @@ export function isAllowed(url: string) {
 }
 
 export type ProxyPayload =
-  | { kind: "mp4"; ep: number; q: string }
-  | { kind: "hls-master"; ep: number }
-  | { kind: "hls-seg"; ep: number; path: string; fallback?: string }
+  | { kind: "mp4"; ep: number; q: string; u?: string }
+  | { kind: "hls-master"; ep: number; u?: string }
+  | { kind: "hls-playlist"; ep: number; u: string }
+  | { kind: "hls-seg"; ep: number; u: string }
   | { kind: "url"; u: string };
 
 function toBase64Url(bytes: Uint8Array) {
@@ -49,7 +50,7 @@ async function hmacKey() {
   );
 }
 
-export async function signPayload(payload: ProxyPayload, ttlSec = 30 * 24 * 3600) {
+export async function signPayload(payload: ProxyPayload, ttlSec = 6 * 3600) {
   const exp = Math.floor(Date.now() / 1000) + ttlSec;
   const body = toBase64Url(new TextEncoder().encode(JSON.stringify({ ...payload, exp })));
   const key = await hmacKey();
@@ -75,14 +76,23 @@ export async function verifyPayload(t: string): Promise<ProxyPayload | null> {
     if (typeof data.exp !== "number" || data.exp < Math.floor(Date.now() / 1000)) return null;
     if (typeof data.u === "string") {
       if (!isAllowed(data.u)) return null;
+      if (data.kind === "hls-seg" && typeof data.ep === "number") {
+        return { kind: "hls-seg", ep: data.ep, u: data.u };
+      }
+      if (data.kind === "hls-playlist" && typeof data.ep === "number") {
+        return { kind: "hls-playlist", ep: data.ep, u: data.u };
+      }
+      if (data.kind === "hls-master" && typeof data.ep === "number") {
+        return { kind: "hls-master", ep: data.ep, u: data.u };
+      }
+      if (data.kind === "mp4" && typeof data.ep === "number" && typeof data.q === "string") {
+        return { kind: "mp4", ep: data.ep, q: data.q, u: data.u };
+      }
       return { kind: "url", u: data.u };
     }
     if (typeof data.ep !== "number") return null;
     if (data.kind === "mp4" && typeof data.q === "string") return { kind: "mp4", ep: data.ep, q: data.q };
     if (data.kind === "hls-master") return { kind: "hls-master", ep: data.ep };
-    if (data.kind === "hls-seg" && typeof data.path === "string") {
-      return { kind: "hls-seg", ep: data.ep, path: data.path, fallback: data.fallback };
-    }
     return null;
   } catch {
     return null;

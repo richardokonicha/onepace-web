@@ -6,9 +6,7 @@ const WORKER = "https://young-dust-31f3.reimoto.workers.dev/?url=";
 
 export type HlsSession = {
   masterUrl: string;
-  origin: string;
-  query: string;
-  paths: string[];
+  variants: string[];
 };
 
 export type StreamSession = {
@@ -152,13 +150,13 @@ async function resolveHls(embed: string, notes: string[]): Promise<HlsSession | 
           }
         }
         if (!text.includes("#EXTM3U")) continue;
-        const u = new URL(cand);
-        const paths = text
+        const variants = text
           .split(/\r?\n/)
           .map((l) => l.trim())
           .filter((l) => l && !l.startsWith("#"))
-          .map((l) => new URL(l, cand).pathname);
-        return { masterUrl: cand, origin: u.origin, query: u.search.replace(/^\?/, ""), paths };
+          .map((l) => new URL(l, cand).href);
+        if (variants.length === 0) continue;
+        return { masterUrl: cand, variants };
       }
     }
     if (attempt < 3) await new Promise((r) => setTimeout(r, 200));
@@ -377,9 +375,4 @@ export async function resolveSession(episodeId: number, seriesId: number, force 
 
 export function getSessionSync(episodeId: number, seriesId: number) {
   return sessions.get(`${seriesId}:${episodeId}`) || null;
-}
-
-export function buildHlsUrl(session: HlsSession, path: string) {
-  const q = session.query ? `?${session.query}` : "";
-  return `${session.origin}${path}${q}`;
 }

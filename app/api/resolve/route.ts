@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
         type: "hls",
         quality: "900p",
         codec: "h264",
-        proxyUrl: `/api/proxy/hls?t=${await signPayload({ ep: ep.id, kind: "hls-master" })}`,
+        proxyUrl: `/api/proxy/hls?t=${await signPayload({ ep: ep.id, kind: "hls-master", u: session.hls.masterUrl })}`,
       });
     }
 
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
         type: "mp4",
         quality: q,
         codec: q === "1080p" ? "av1" : "h264",
-        proxyUrl: `/api/proxy/mp4?t=${await signPayload({ ep: ep.id, kind: "mp4", q })}`,
+        proxyUrl: `/api/proxy/mp4?t=${await signPayload({ ep: ep.id, kind: "mp4", q, u: session.mp4[q] })}`,
       });
     }
 

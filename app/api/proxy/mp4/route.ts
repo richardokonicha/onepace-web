@@ -39,24 +39,32 @@ export async function GET(req: NextRequest) {
   const range = req.headers.get("range");
   const seriesId = 98;
 
-  const attempt = async (force: boolean) => {
-    const session = await resolveSession(payload.ep, seriesId, force);
-    const upstream = session.mp4[payload.q];
-    if (!upstream) return null;
-    const res = await tryFetch(upstream, range);
-    return res ? { res, session } : null;
-  };
+  const upstreamCandidates: string[] = [];
+  if (payload.u) upstreamCandidates.push(payload.u);
 
-  let hit: Awaited<ReturnType<typeof attempt>> = null;
   try {
-    hit = await attempt(false);
-    if (!hit) hit = await attempt(true);
-  } catch (e: unknown) {
-    return NextResponse.json({ error: errorMessage(e) }, { status: 502 });
-  }
-  if (!hit) return NextResponse.json({ error: "stream unavailable" }, { status: 502 });
+    const session = await resolveSession(payload.ep, seriesId, false);
+    const resolved = session.mp4[payload.q];
+    if (resolved && !upstreamCandidates.includes(resolved)) upstreamCandidates.push(resolved);
+  } catch {}
 
-  const res = hit.res;
+  if (upstreamCandidates.length === 0) {
+    try {
+      const session = await resolveSession(payload.ep, seriesId, true);
+      const resolved = session.mp4[payload.q];
+      if (resolved) upstreamCandidates.push(resolved);
+    } catch (e: unknown) {
+      return NextResponse.json({ error: errorMessage(e) }, { status: 502 });
+    }
+  }
+
+  let res: Response | null = null;
+  for (const u of upstreamCandidates) {
+    res = await tryFetch(u, range);
+    if (res) break;
+  }
+  if (!res) return NextResponse.json({ error: "stream unavailable" }, { status: 502 });
+
   const respHeaders = new Headers();
   respHeaders.set("Access-Control-Allow-Origin", "*");
   respHeaders.set("Accept-Ranges", "bytes");
