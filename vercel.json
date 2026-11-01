@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "app/api/resolve/route.ts": {
+      "regions": ["iad1", "hnd1", "sfo1", "fra1"]
+    }
+  }
+}
