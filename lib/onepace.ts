@@ -2,11 +2,13 @@ const BASE = "https://onepace.co";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
 export async function fetchOnepace(path: string, init?: RequestInit) {
-  const res = await fetch(`${BASE}${path}`, {
+  const url = path.startsWith("http") ? path : `${BASE}${path}`;
+  const res = await fetch(url, {
     ...init,
     headers: {
       "User-Agent": UA,
       Referer: `${BASE}/`,
+      "Accept": "application/json, text/plain, */*",
       ...(init?.headers || {}),
     },
     cache: "no-store",
