@@ -301,128 +301,68 @@ export async function resolveSession(episodeId: number, seriesId: number, force 
 
   const hasSource = () => session.hls !== null || Object.keys(session.mp4).length > 0;
 
-  const primary = async () => {
-    const tasks: Promise<void>[] = [];
+  const primary = async (): Promise<void> => {
+    const tasks: Array<() => Promise<void>> = [];
     if (vidmoly) {
-      tasks.push(
-        resolveHls(vidmoly.embed, notes)
-          .then((v) => {
-            if (v) session.hls = v;
-            return;
-          })
-          .catch((e: unknown) => notes.push(`vidmoly: ${errorMessage(e)}`))
-      );
+      tasks.push(async () => {
+        try {
+          const v = await resolveHls(vidmoly.embed, notes);
+          if (v) session.hls = v;
+        } catch (e: unknown) { notes.push(`vidmoly: ${errorMessage(e)}`); }
+      });
     }
     if (neo) {
-      tasks.push(
-        resolveNeo(neo.embed, notes)
-          .then((v) => {
-            session.mp4 = { ...session.mp4, ...v };
-            return;
-          })
-          .catch((e: unknown) => notes.push(`neocdn: ${errorMessage(e)}`))
-      );
+      tasks.push(async () => {
+        try {
+          const v = await resolveNeo(neo.embed, notes);
+          session.mp4 = { ...session.mp4, ...v };
+        } catch (e: unknown) { notes.push(`neocdn: ${errorMessage(e)}`); }
+      });
     }
-    await Promise.all(tasks);
+    await Promise.all(tasks.map(t=>t()));
   };
 
-  const secondary = async () => {
-    const tasks: Promise<void>[] = [];
+  const secondary = async (): Promise<void> => {
+    const tasks: Array<() => Promise<void>> = [];
     if (vidstream && !hasSource()) {
-      tasks.push(
-        resolveVidStream(vidstream.embed, notes)
-          .then((v) => {
-            if (Object.keys(v).length > 0) session.mp4 = { ...session.mp4, ...v };
-            return;
-          })
-          .catch((e: unknown) => notes.push(`vidstream: ${errorMessage(e)}`))
-      );
+      tasks.push(async () => {
+        try {
+          const v = await resolveVidStream(vidstream.embed, notes);
+          if (Object.keys(v).length > 0) session.mp4 = { ...session.mp4, ...v };
+        } catch (e: unknown) { notes.push(`vidstream: ${errorMessage(e)}`); }
+      });
     } else if (vidstream) {
-      tasks.push(
-        resolveVidStream(vidstream.embed, notes)
-          .then((v) => {
-            if (Object.keys(v).length > 0 && Object.keys(session.mp4).length === 0) session.mp4 = { ...session.mp4, ...v };
-            return;
-          })
-          .catch(() => {})
-      );
+      tasks.push(async () => {
+        try {
+          const v = await resolveVidStream(vidstream.embed, notes);
+          if (Object.keys(v).length > 0 && Object.keys(session.mp4).length === 0) session.mp4 = { ...session.mp4, ...v };
+        } catch {}
+      });
     }
     if (hydrax) {
-      tasks.push(
-        resolveHydraX(hydrax.embed, notes)
-          .then((v) => {
-            if (Object.keys(v).length > 0 && !hasSource()) session.mp4 = { ...session.mp4, ...v };
-            else if (Object.keys(v).length > 0 && Object.keys(session.mp4).length === 0) session.mp4 = { ...session.mp4, ...v };
-            return;
-          })
-          .catch((e: unknown) => notes.push(`hydrax: ${errorMessage(e)}`))
-      );
+      tasks.push(async () => {
+        try {
+          const v = await resolveHydraX(hydrax.embed, notes);
+          if (Object.keys(v).length > 0 && !hasSource()) session.mp4 = { ...session.mp4, ...v };
+          else if (Object.keys(v).length > 0 && Object.keys(session.mp4).length === 0) session.mp4 = { ...session.mp4, ...v };
+        } catch (e: unknown) { notes.push(`hydrax: ${errorMessage(e)}`); }
+      });
     }
-    if (mirror) {
-      tasks.push(
-        resolveGenericMp4(mirror.embed)
-          .then((v) => {
+    for (const [name, src] of [['mirror', mirror], ['sruby', sruby], ['omega', omega], ['vidcloud', vidcloud], ['pixel', pixel], ['vidsrc', vidsrc]] as const) {
+      if (src) {
+        tasks.push(async () => {
+          try {
+            const v = await resolveGenericMp4((src as any).embed);
             if (Object.keys(v).length > 0 && Object.keys(session.mp4).length === 0) session.mp4 = { ...session.mp4, ...v };
-            return;
-          })
-          .catch((e: unknown) => notes.push(`mirror: ${errorMessage(e)}`))
-      );
+          } catch (e: unknown) { notes.push(`${name}: ${errorMessage(e)}`); }
+        });
+      }
     }
-    if (sruby) {
-      tasks.push(
-        resolveGenericMp4(sruby.embed)
-          .then((v) => {
-            if (Object.keys(v).length > 0 && Object.keys(session.mp4).length === 0) session.mp4 = { ...session.mp4, ...v };
-            return;
-          })
-          .catch((e: unknown) => notes.push(`sruby: ${errorMessage(e)}`))
-      );
-    }
-    if (omega) {
-      tasks.push(
-        resolveGenericMp4(omega.embed)
-          .then((v) => {
-            if (Object.keys(v).length > 0 && Object.keys(session.mp4).length === 0) session.mp4 = { ...session.mp4, ...v };
-            return;
-          })
-          .catch((e: unknown) => notes.push(`omega: ${errorMessage(e)}`))
-      );
-    }
-    if (vidcloud) {
-      tasks.push(
-        resolveGenericMp4(vidcloud.embed)
-          .then((v) => {
-            if (Object.keys(v).length > 0 && Object.keys(session.mp4).length === 0) session.mp4 = { ...session.mp4, ...v };
-            return;
-          })
-          .catch((e: unknown) => notes.push(`vidcloud: ${errorMessage(e)}`))
-      );
-    }
-    if (pixel) {
-      tasks.push(
-        resolveGenericMp4(pixel.embed)
-          .then((v) => {
-            if (Object.keys(v).length > 0 && Object.keys(session.mp4).length === 0) session.mp4 = { ...session.mp4, ...v };
-            return;
-          })
-          .catch((e: unknown) => notes.push(`pixel: ${errorMessage(e)}`))
-      );
-    }
-    if (vidsrc) {
-      tasks.push(
-        resolveGenericMp4(vidsrc.embed)
-          .then((v) => {
-            if (Object.keys(v).length > 0 && Object.keys(session.mp4).length === 0) session.mp4 = { ...session.mp4, ...v };
-            return;
-          })
-          .catch((e: unknown) => notes.push(`vidsrc: ${errorMessage(e)}`))
-      );
-    }
-    await Promise.all(tasks);
+    await Promise.all(tasks.map(t=>t()));
   };
 
   await Promise.race([
-    primary().then(secondary),
+    primary().then(() => secondary()),
     new Promise((resolve) => setTimeout(resolve, RESOLVE_DEADLINE_MS)),
   ]);
 
