@@ -8,25 +8,41 @@ export const dynamic = "force-dynamic";
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const WORKER = "https://young-dust-31f3.reimoto.workers.dev/?url=";
+const UPSTREAM_TIMEOUT_MS = 15000;
 
 async function tryFetch(upstream: string, range: string | null) {
   const headers: Record<string, string> = { "User-Agent": UA, Referer: "https://onepace.co/" };
   if (range) headers["Range"] = range;
   try {
-    const res = await fetch(upstream, { headers, cache: "no-store", redirect: "follow" });
+    const res = await fetchWithTimeout(upstream, headers, UPSTREAM_TIMEOUT_MS);
     if (res.status === 200 || res.status === 206) return res;
     await res.body?.cancel();
   } catch {}
   try {
-    const res = await fetch(WORKER + encodeURIComponent(upstream), {
-      headers: range ? { Range: range, "User-Agent": UA } : { "User-Agent": UA },
-      cache: "no-store",
-      redirect: "follow",
-    });
+    const res = await fetchWithTimeout(
+      WORKER + encodeURIComponent(upstream),
+      range ? { Range: range, "User-Agent": UA } : { "User-Agent": UA },
+      UPSTREAM_TIMEOUT_MS
+    );
     if (res.status === 200 || res.status === 206) return res;
     await res.body?.cancel();
   } catch {}
   return null;
+}
+
+async function fetchWithTimeout(url: string, headers: Record<string, string>, timeoutMs: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      headers,
+      cache: "no-store",
+      redirect: "follow",
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -41,12 +57,6 @@ export async function GET(req: NextRequest) {
 
   const upstreamCandidates: string[] = [];
   if (payload.u) upstreamCandidates.push(payload.u);
-
-  try {
-    const session = await resolveSession(payload.ep, seriesId, false);
-    const resolved = session.mp4[payload.q];
-    if (resolved && !upstreamCandidates.includes(resolved)) upstreamCandidates.push(resolved);
-  } catch {}
 
   if (upstreamCandidates.length === 0) {
     try {

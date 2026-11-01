@@ -6,6 +6,7 @@ export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+const UPSTREAM_TIMEOUT_MS = 20000;
 
 export async function GET(req: NextRequest) {
   const t = req.nextUrl.searchParams.get("t");
@@ -19,13 +20,22 @@ export async function GET(req: NextRequest) {
   if (range) headers["Range"] = range;
 
   let res: Response | null = null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   try {
-    const r = await fetch(payload.u, { headers, cache: "no-store", redirect: "follow" });
+    const r = await fetch(payload.u, {
+      headers,
+      cache: "no-store",
+      redirect: "follow",
+      signal: controller.signal,
+    });
     if (r.ok) res = r;
     else await r.body?.cancel();
   } catch (e: unknown) {
+    clearTimeout(timer);
     return NextResponse.json({ error: errorMessage(e) }, { status: 502 });
   }
+  clearTimeout(timer);
   if (!res) return NextResponse.json({ error: "segment unavailable" }, { status: 502 });
 
   const respHeaders = new Headers();

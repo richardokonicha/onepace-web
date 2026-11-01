@@ -7,15 +7,23 @@ export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+const UPSTREAM_TIMEOUT_MS = 12000;
 
 export async function fetchUpstream(url: string, referer = "https://onepace.co/") {
-  const res = await fetch(url, {
-    headers: { "User-Agent": UA, Referer: referer },
-    cache: "no-store",
-    redirect: "follow",
-  });
-  if (!res.ok) throw new Error(`upstream ${res.status}`);
-  return res.text();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": UA, Referer: referer },
+      cache: "no-store",
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`upstream ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -30,7 +38,6 @@ export async function GET(req: NextRequest) {
 
   let masterUrl = payload.u;
   let text = "";
-  let session = await resolveSession(payload.ep, seriesId, false);
 
   if (masterUrl) {
     try {
@@ -41,7 +48,7 @@ export async function GET(req: NextRequest) {
   }
 
   if (!masterUrl || !text.includes("#EXTM3U")) {
-    session = await resolveSession(payload.ep, seriesId, true);
+    const session = await resolveSession(payload.ep, seriesId, true);
     if (!session.hls) return NextResponse.json({ error: "hls unavailable" }, { status: 502 });
     masterUrl = session.hls.masterUrl;
     try {
@@ -85,7 +92,8 @@ export async function GET(req: NextRequest) {
     headers: {
       "Content-Type": "application/vnd.apple.mpegurl; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=3600",
+      "Vercel-CDN-Cache-Control": "s-maxage=300, stale-while-revalidate=3600",
     },
   });
 }

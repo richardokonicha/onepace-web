@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getLibrary } from "@/lib/library";
-import { resolveSession } from "@/lib/resolver";
+import { getEpisodeLocal } from "@/lib/library";
+import { resolveParallel } from "@/lib/resolver";
 import { signPayload } from "@/lib/proxy";
+import { hlsCandidate, mp4Candidates } from "@/lib/candidates";
+import { cacheHeaders } from "@/lib/cache-headers";
 import { errorMessage } from "@/lib/onepace";
 
 export const runtime = "edge";
@@ -18,15 +20,16 @@ export async function GET(req: NextRequest) {
   const key = `ep:${id}`;
   if (!fresh) {
     const hit = cache.get(key);
-    if (hit && Date.now() - hit.ts < TTL) return NextResponse.json(hit.data);
+    if (hit && Date.now() - hit.ts < TTL) {
+      return NextResponse.json(hit.data, { headers: cacheHeaders(fresh) });
+    }
   }
 
   try {
-    const { episodes } = await getLibrary(98);
-    const ep = episodes.find((e) => e.id === id);
+    const ep = getEpisodeLocal(id);
     if (!ep) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-    const session = await resolveSession(ep.id, ep.series_id, fresh);
+    const session = await resolveParallel(ep.id, ep.series_id, fresh);
     const candidates: unknown[] = [];
 
     if (session.hls) {
@@ -38,20 +41,14 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const preferred = ["720p", "480p", "360p", "1080p"];
-    const qualities = [...preferred.filter((q) => session.mp4[q]), ...Object.keys(session.mp4).filter((q) => !preferred.includes(q))];
-    for (const q of qualities) {
-      candidates.push({
-        type: "mp4",
-        quality: q,
-        codec: q === "1080p" ? "av1" : "h264",
-        proxyUrl: `/api/proxy/mp4?t=${await signPayload({ ep: ep.id, kind: "mp4", q, u: session.mp4[q] })}`,
-      });
+    for (const extra of session.hlsExtra) {
+      candidates.push(await hlsCandidate(ep.id, extra));
     }
+    candidates.push(...(await mp4Candidates(ep.id, session.mp4)));
 
     const data = { episodeId: ep.id, candidates, episode: ep, notes: session.notes };
     if (candidates.length > 0) cache.set(key, { data, ts: Date.now() });
-    return NextResponse.json(data);
+    return NextResponse.json(data, { headers: cacheHeaders(fresh) });
   } catch (e: unknown) {
     console.error(e);
     return NextResponse.json({ error: errorMessage(e) }, { status: 500 });

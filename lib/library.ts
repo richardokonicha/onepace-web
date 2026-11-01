@@ -11,6 +11,13 @@ interface EpisodesResp {
 let cache: { episodes: Episode[]; arcs: Arc[]; ts: number } | null = null;
 const TTL = 60 * 60 * 1000;
 
+const localEpisodes = build((fallback as EpisodesResp).episodes).episodes;
+const localIndex = new Map<number, Episode>(localEpisodes.map((e) => [e.id, e]));
+
+export function getEpisodeLocal(id: number): Episode | null {
+  return localIndex.get(id) ?? null;
+}
+
 function build(episodes: Episode[]) {
   const eps = [...episodes].sort((a, b) => (a.season ?? 0) - (b.season ?? 0) || a.episode - b.episode).map((e, i) => ({ ...e, globalIndex: i + 1 }));
   const arcMap = new Map<number, Arc>();

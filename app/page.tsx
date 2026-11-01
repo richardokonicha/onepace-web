@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { getLibrary } from "@/lib/library";
+import { EpisodeCard } from "./episode-card";
 
 export const dynamic = "force-dynamic";
 
@@ -17,17 +17,7 @@ export default async function Home() {
             <h2 className="text-lg mb-3">{arc.label}</h2>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
               {arc.episodes.map((ep) => (
-                <Link
-                  key={ep.id}
-                  href={`/watch/${ep.id}`}
-                  className="block border border-white/10 rounded overflow-hidden hover:border-white/40"
-                >
-                  <div className="aspect-video bg-white/5" />
-                  <div className="p-2">
-                    <div className="text-xs text-white/60">{ep.label}</div>
-                    <div className="text-sm truncate">{ep.name}</div>
-                  </div>
-                </Link>
+                <EpisodeCard key={ep.id} id={ep.id} label={ep.label} name={ep.name} />
               ))}
             </div>
           </section>
