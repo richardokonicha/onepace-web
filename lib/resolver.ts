@@ -196,25 +196,25 @@ async function resolveHls(embed: string, notes: string[]): Promise<HlsSession | 
   }
 
   const attempt = async (): Promise<HlsSession | null> => {
-    let vpage = "";
     try {
-      vpage = await fetchText(upstream!, embed);
-    } catch {
+      let vpage = "";
       try {
-        vpage = await fetchViaWorker(upstream!, embed);
+        vpage = await fetchText(upstream!, embed);
       } catch {
-        return null;
+        vpage = await fetchViaWorker(upstream!, embed);
       }
+      const masters = vpage.match(/https:\/\/[^"']+master\.m3u8[^"']*/g) || [];
+      const primary = masters[0];
+      if (!primary) return null;
+      // Probe the primary and its host variants together: the CDN often
+      // rejects one host while a sibling serves the same token fine.
+      const candidates = [primary, ...hostVariants(primary).slice(1), ...masters.slice(1)];
+      const probed = await Promise.all(candidates.map((c) => fetchPlaylist(c)));
+      const idx = probed.findIndex((t) => t !== null);
+      return idx >= 0 ? { masterUrl: candidates[idx] } : null;
+    } catch {
+      return null;
     }
-    const masters = vpage.match(/https:\/\/[^"']+master\.m3u8[^"']*/g) || [];
-    const primary = masters[0];
-    if (!primary) return null;
-    // Probe the primary and its host variants together: the CDN often
-    // rejects one host while a sibling serves the same token fine.
-    const candidates = [primary, ...hostVariants(primary).slice(1), ...masters.slice(1)];
-    const probed = await Promise.all(candidates.map((c) => fetchPlaylist(c)));
-    const idx = probed.findIndex((t) => t !== null);
-    return idx >= 0 ? { masterUrl: candidates[idx] } : null;
   };
 
   // Each pass over the player page yields a fresh playback token, so probe
@@ -225,9 +225,11 @@ async function resolveHls(embed: string, notes: string[]): Promise<HlsSession | 
   });
   const attempts = [attempt(), attempt()];
   for (const p of attempts) {
-    void p.then((v) => {
-      if (v) settle?.(v);
-    });
+    void p
+      .then((v) => {
+        if (v) settle?.(v);
+      })
+      .catch(() => undefined);
   }
 
   const result = await Promise.race([
