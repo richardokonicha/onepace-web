@@ -8,14 +8,16 @@ import { useCast } from "@/hooks/limeplay/use-cast"
 /**
  * Routes playback to an external receiver.
  *
- * Chromecast is handled by Shaka's `CastProxy`, which keeps every Limeplay
- * feature in sync with the receiver. Miracast is handled through the browser
- * Presentation API, which is how Chromium exposes wireless display targets.
- * The icon reflects the live connection state: searching, connected or
- * disconnected.
+ * Chromecast is handled through the Cast Web Sender SDK and Google's default
+ * media receiver, which keeps every Limeplay feature in sync with the
+ * receiver. Miracast is handled through the browser Presentation API, which is
+ * how Chromium exposes wireless display targets on Windows. The icon reflects
+ * the live connection state: searching, connected or disconnected.
  */
 export function CastControl() {
   const {
+    castError,
+    chromecastAvailable,
     deviceName,
     isCasting,
     miracastAvailable,
@@ -23,24 +25,28 @@ export function CastControl() {
     startMiracast,
     status,
     stopCasting,
-    supported,
   } = useCast()
 
-  if (!supported && !miracastAvailable) return null
+  if (!chromecastAvailable && !miracastAvailable) return null
+
+  // Miracast is the fallback for browsers without Chromecast receivers.
+  const useMiracast = !chromecastAvailable && miracastAvailable
 
   const label = isCasting
     ? `Disconnect from ${deviceName || "external display"}`
-    : status === "searching"
-      ? "Searching for a receiver"
-      : "Cast to a device"
+    : castError
+      ? castError
+      : status === "searching"
+        ? "Searching for a receiver"
+        : "Cast to a device"
 
   const handleClick = () => {
     if (isCasting) {
-      stopCasting()
+      void stopCasting()
       return
     }
 
-    if (miracastAvailable) {
+    if (useMiracast) {
       void startMiracast()
       return
     }
@@ -59,12 +65,13 @@ export function CastControl() {
             ? "text-white"
             : undefined
       }
+      disabled={!isCasting && !useMiracast && status === "searching"}
       onClick={handleClick}
       size="icon"
       title={label}
       variant="glass"
     >
-      {miracastAvailable ? (
+      {useMiracast ? (
         <MonitorUp aria-hidden="true" className="size-4" strokeWidth={2} />
       ) : (
         <Cast aria-hidden="true" className="size-4" strokeWidth={2} />

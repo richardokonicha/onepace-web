@@ -1,15 +1,17 @@
 "use client"
 
-import type shaka from "shaka-player"
-
 import * as React from "react"
 
+import { useAssetStore } from "@/hooks/limeplay/use-asset"
 import { useMediaStore } from "@/hooks/limeplay/use-media"
-import { usePlayerStore } from "@/hooks/limeplay/use-player"
+import { usePlaylistStore } from "@/hooks/limeplay/use-playlist"
 
 /**
- * Google's default media receiver application id. It accepts HLS and DASH
- * manifests over plain HTTP(S).
+ * Google's default media receiver application id.
+ *
+ * The receiver fetches the manifest URL it is handed and plays it with its
+ * own controls. Shaka's own cast receiver application is no longer hosted,
+ * so the Shaka specific protocol cannot be used here.
  */
 export const DEFAULT_CAST_RECEIVER_APP_ID = "CC1AD845"
 
@@ -19,6 +21,12 @@ export const DEFAULT_CAST_RECEIVER_APP_ID = "CC1AD845"
  */
 const CAST_SENDER_SDK_URL =
   "https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"
+
+/**
+ * How long to wait for the Cast sender SDK to come up. The SDK is fetched
+ * from a third party, so it can be slow or blocked entirely.
+ */
+const CAST_SDK_TIMEOUT_MS = 10000
 
 /**
  * Connection state of the external display route.
@@ -39,9 +47,48 @@ export interface UseCastOptions {
   receiverAppId?: string
 }
 
-interface ChromeCastApi {
-  cast?: {
-    isAvailable?: (options?: unknown) => boolean
+interface CastDevice {
+  friendlyName?: string
+  name?: string
+}
+
+interface CastSession {
+  getCastDevice?: () => CastDevice | null
+  getId?: () => string
+  loadMedia: (request: CastMediaRequest) => Promise<void>
+  stopCasting?: () => Promise<void>
+}
+
+interface CastMediaRequest {
+  contentId: string
+  contentType: string
+  metadata?: { title?: string; subtitle?: string }
+  streamType?: "BUFFERED" | "LIVE"
+}
+
+interface CastContext {
+  addEventListener: (
+    type: string,
+    listener: (event: { castState: string }) => void
+  ) => void
+  endCurrentSession: (stopCasting?: boolean) => Promise<void>
+  getCastState: () => string
+  getCurrentSession: () => CastSession | null
+  requestSession: () => Promise<CastSession>
+  setOptions: (options: {
+    autoJoinPolicy?: string
+    receiverApplicationId: string
+  }) => void
+}
+
+interface CastFramework {
+  CastContext: { getInstance: () => CastContext }
+  CastContextEventType: { CAST_STATE_CHANGED: string }
+  CastState: {
+    CONNECTED: string
+    CONNECTING: string
+    NO_DEVICES_AVAILABLE: string
+    NOT_CASTING: string
   }
 }
 
@@ -67,7 +114,7 @@ interface NavigatorPresentation {
 
 declare global {
   interface Window {
-    chrome?: ChromeCastApi
+    cast?: { framework?: CastFramework }
     __onGCastApiAvailable?: (available: boolean) => void
   }
 
@@ -79,7 +126,23 @@ declare global {
 let castSdkPromise: null | Promise<boolean> = null
 
 /**
+ * Whether the Cast framework finished loading.
+ *
+ * The sender SDK ships in several pieces. The framework that exposes
+ * `CastContext` arrives last, and only then is a session request possible.
+ */
+function castFrameworkReady(): boolean {
+  if (typeof window === "undefined") return false
+
+  return typeof window.cast?.framework?.CastContext === "function"
+}
+
+/**
  * Loads the Chrome Cast sender SDK once per document.
+ *
+ * Resolves `true` once the framework is usable. The SDK notifies through the
+ * `__onGCastApiAvailable` global, which has to be installed *before* the
+ * script is injected because the SDK calls it exactly once.
  */
 function loadCastSenderSdk(): Promise<boolean> {
   if (typeof window === "undefined") return Promise.resolve(false)
@@ -87,41 +150,52 @@ function loadCastSenderSdk(): Promise<boolean> {
   if (castSdkPromise) return castSdkPromise
 
   castSdkPromise = new Promise<boolean>((resolve) => {
-    if (window.chrome?.cast?.isAvailable) {
-      resolve(true)
+    let settled = false
+    let poll = 0
+
+    const settle = (available: boolean) => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      window.clearInterval(poll)
+      // Allow a later attempt to retry when the SDK never came up.
+      if (!available) castSdkPromise = null
+      resolve(available)
+    }
+
+    const timer = window.setTimeout(() => settle(false), CAST_SDK_TIMEOUT_MS)
+
+    const previous = window.__onGCastApiAvailable
+    window.__onGCastApiAvailable = (available: boolean) => {
+      previous?.(available)
+      // The notification can arrive before the framework is exposed, so the
+      // poll below decides when the SDK is actually usable.
+      if (available && castFrameworkReady()) settle(true)
+    }
+
+    if (castFrameworkReady()) {
+      settle(true)
       return
     }
+
+    // The framework is loaded by the SDK in the background, so poll for it in
+    // case the notification arrives before the framework is exposed.
+    poll = window.setInterval(() => {
+      if (castFrameworkReady()) settle(true)
+    }, 100)
 
     const existing = document.querySelector<HTMLScriptElement>(
       `script[src^="${CAST_SENDER_SDK_URL.split("?")[0]}"]`
     )
 
-    const onReady = (available: boolean) => {
-      if (available) {
-        resolve(true)
-        return
-      }
-      resolve(false)
-    }
-
     const script = existing ?? document.createElement("script")
 
     script.addEventListener("load", () => {
-      if (window.chrome?.cast?.isAvailable) {
-        resolve(true)
-        return
-      }
-
-      // The SDK calls `__onGCastApiAvailable` once the cast API is ready.
-      const previous = window.__onGCastApiAvailable
-      window.__onGCastApiAvailable = (available: boolean) => {
-        previous?.(available)
-        onReady(available)
-      }
+      if (castFrameworkReady()) settle(true)
     })
 
     script.addEventListener("error", () => {
-      resolve(false)
+      settle(false)
     })
 
     if (!existing) {
@@ -134,63 +208,79 @@ function loadCastSenderSdk(): Promise<boolean> {
   return castSdkPromise
 }
 
-type CastProxyConstructor = new (
-  video: HTMLMediaElement,
-  player: shaka.Player,
-  receiverAppId: string,
-  androidReceiverCompatible: boolean
-) => shaka.cast.CastProxy
-
-function getCastNamespace(): null | CastProxyConstructor {
-  if (typeof window === "undefined") return null
-
-  const namespace = window.shaka as unknown as {
-    cast?: { CastProxy?: CastProxyConstructor }
+/**
+ * Turns a playback source into an absolute URL.
+ *
+ * The receiver runs on another device and fetches the manifest itself, so a
+ * relative proxy path is useless for it.
+ */
+function absoluteSourceUrl(source: string): string {
+  try {
+    return new URL(source, window.location.origin).href
+  } catch {
+    return source
   }
+}
 
-  if (typeof namespace?.cast?.CastProxy !== "function") return null
+/**
+ * Picks the content type the receiver should use for a source.
+ */
+function sourceContentType(source: string): string {
+  return source.includes("/api/proxy/mp4") ? "video/mp4" : "application/x-mpegurl"
+}
 
-  return namespace.cast.CastProxy
+/**
+ * Maps a Cast SDK failure to a message that makes sense in the UI.
+ */
+function describeCastError(error: unknown): string {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code: unknown }).code)
+      : ""
+
+  switch (code) {
+    case "cancel":
+      return "The cast request was cancelled."
+    case "timeout":
+      return "No receiver answered in time."
+    case "receiver_unavailable":
+      return "The receiver is no longer available."
+    default:
+      return "Could not start the cast session."
+  }
+}
+
+function stringProperty(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined
 }
 
 /**
  * Manages external display routing for the active Limeplay player.
  *
- * Chromecast is handled by Shaka's own `CastProxy`, which replaces the local
- * player with a proxy that forwards every getter to the receiver while a
- * session is active. Miracast is handled through the browser Presentation API,
- * which is how Chromium exposes wireless display targets on Windows.
+ * Chromecast is handled through the Cast Web Sender SDK and Google's default
+ * media receiver, which plays the manifest URL directly. Miracast is handled
+ * through the browser Presentation API, which is how Chromium exposes
+ * wireless display targets on Windows.
  */
 export function useCast({ receiverAppId }: UseCastOptions = {}) {
   const mediaElement = useMediaStore((state) => state.mediaElement)
-  const player = usePlayerStore((state) => state.instance)
-  const setPlayerInstance = usePlayerStore((state) => state.setInstance)
+  const resolvedSource = useAssetStore((state) => state.resolvedSource)
+  const title = usePlaylistStore((state) =>
+    stringProperty(state.currentItem?.properties?.title)
+  )
 
-  const [status, setStatus] = React.useState<CastStatus>("unavailable")
+  const [chromecastState, setChromecastState] = React.useState<CastStatus>(
+    "unavailable"
+  )
+  const [miracastState, setMiracastState] = React.useState<CastStatus>(
+    "unavailable"
+  )
   const [deviceName, setDeviceName] = React.useState("")
-  const [miracastAvailable, setMiracastAvailable] = React.useState(false)
+  const [castError, setCastError] = React.useState("")
 
-  const proxyRef = React.useRef<null | shaka.cast.CastProxy>(null)
-  const localPlayerRef = React.useRef<null | shaka.Player>(null)
+  const contextRef = React.useRef<null | CastContext>(null)
+  const sessionRef = React.useRef<null | CastSession>(null)
   const presentationSessionRef = React.useRef<null | PresentationSession>(null)
-
-  const syncStatus = React.useCallback(() => {
-    const proxy = proxyRef.current
-
-    if (!proxy) {
-      setStatus("unavailable")
-      return
-    }
-
-    if (proxy.isCasting()) {
-      setStatus("connected")
-      setDeviceName(proxy.receiverName())
-      return
-    }
-
-    setDeviceName("")
-    setStatus(proxy.canCast() ? "disconnected" : "searching")
-  }, [])
 
   // Miracast discovery through the Presentation API.
   React.useEffect(() => {
@@ -206,12 +296,8 @@ export function useCast({ receiverAppId }: UseCastOptions = {}) {
         const availability = await presentation.getAvailability()
         if (cancelled) return
 
-        setMiracastAvailable(availability === "available")
-
-        setStatus((current) =>
-          current === "connected" ? current : availability === "available"
-            ? "disconnected"
-            : "searching"
+        setMiracastState(
+          availability === "available" ? "disconnected" : "unavailable"
         )
       } catch {
         /* availability probing is best effort */
@@ -227,91 +313,130 @@ export function useCast({ receiverAppId }: UseCastOptions = {}) {
     }
   }, [])
 
-  // Build the Cast proxy as soon as Shaka exposes a player and a video node.
+  // Chromecast discovery and session handling through the Cast SDK.
   React.useEffect(() => {
-    if (!mediaElement || !player) return
-    if (proxyRef.current) return
-
-    const CastProxy = getCastNamespace()
-    if (!CastProxy) return
-
     let cancelled = false
 
-    const build = async () => {
+    const setup = async () => {
       const ready = await loadCastSenderSdk()
       if (cancelled) return
 
-      if (!ready) {
-        setStatus("unavailable")
+      const framework = window.cast?.framework
+      if (!ready || !framework) {
+        setChromecastState("unavailable")
         return
       }
 
-      const video = mediaElement as HTMLVideoElement
-      const proxy = new CastProxy(
-        video,
-        player,
-        receiverAppId ?? DEFAULT_CAST_RECEIVER_APP_ID,
-        false
-      )
+      const context = framework.CastContext.getInstance()
+      contextRef.current = context
 
-      proxyRef.current = proxy
-      localPlayerRef.current = player
-
-      proxy.addEventListener("caststatuschanged", () => {
-        const isCasting = proxy.isCasting()
-
-        if (isCasting) {
-          // Route every Limeplay feature through the proxy so the timeline,
-          // buffering and playback state follow the receiver.
-          setPlayerInstance(proxy.getPlayer())
-        } else if (proxyRef.current && localPlayerRef.current) {
-          setPlayerInstance(localPlayerRef.current)
-        }
-
-        syncStatus()
+      context.setOptions({
+        receiverApplicationId: receiverAppId ?? DEFAULT_CAST_RECEIVER_APP_ID,
+        autoJoinPolicy: "origin_scoped",
       })
 
-      syncStatus()
+      const applyState = (castState: string) => {
+        if (cancelled) return
+
+        switch (castState) {
+          case framework.CastState.CONNECTED: {
+            const device = context.getCurrentSession()?.getCastDevice?.()
+            setDeviceName(device?.friendlyName ?? device?.name ?? "")
+            setChromecastState("connected")
+            return
+          }
+          case framework.CastState.CONNECTING:
+            setChromecastState("searching")
+            return
+          case framework.CastState.NO_DEVICES_AVAILABLE:
+            setDeviceName("")
+            setChromecastState("unavailable")
+            return
+          default:
+            setDeviceName("")
+            setChromecastState("disconnected")
+        }
+      }
+
+      context.addEventListener(
+        framework.CastContextEventType.CAST_STATE_CHANGED,
+        (event) => applyState(event.castState)
+      )
+
+      applyState(context.getCastState())
     }
 
-    void build()
+    void setup()
 
     return () => {
       cancelled = true
     }
-  }, [mediaElement, player, receiverAppId, setPlayerInstance, syncStatus])
+  }, [receiverAppId])
 
-  React.useEffect(() => {
-    return () => {
-      const proxy = proxyRef.current
-      proxyRef.current = null
-
-      if (proxy) {
-        void proxy.destroy(true).catch(() => {})
-      }
+  const status = React.useMemo<CastStatus>(() => {
+    if (chromecastState === "connected" || miracastState === "connected") {
+      return "connected"
     }
-  }, [])
+
+    if (chromecastState === "disconnected" || miracastState === "disconnected") {
+      return "disconnected"
+    }
+
+    if (chromecastState === "searching") return "searching"
+
+    return "unavailable"
+  }, [chromecastState, miracastState])
 
   const startCasting = React.useCallback(async () => {
-    const proxy = proxyRef.current
-    if (!proxy) return
+    const context = contextRef.current
+
+    if (!context) {
+      setCastError("Casting is not available on this device.")
+      return
+    }
+
+    if (!resolvedSource) {
+      setCastError("This episode is not ready to cast yet.")
+      return
+    }
+
+    setCastError("")
+    setChromecastState("searching")
 
     try {
-      setStatus("searching")
-      await proxy.cast()
-      syncStatus()
+      const session = await context.requestSession()
+      sessionRef.current = session
+
+      await session.loadMedia({
+        contentId: absoluteSourceUrl(resolvedSource),
+        contentType: sourceContentType(resolvedSource),
+        streamType: "BUFFERED",
+        ...(title ? { metadata: { title } } : {}),
+      })
+
+      // The receiver takes over, so the local copy has to stay quiet.
+      const video = mediaElement as null | HTMLVideoElement
+      if (video && !video.paused) video.pause()
     } catch (error) {
-      console.error("[useCast] Failed to start the cast session", error)
-      syncStatus()
+      sessionRef.current = null
+      setCastError(describeCastError(error))
+      setChromecastState("disconnected")
     }
-  }, [syncStatus])
+  }, [mediaElement, resolvedSource, title])
 
-  const stopCasting = React.useCallback(() => {
-    const proxy = proxyRef.current
+  const stopCasting = React.useCallback(async () => {
+    const context = contextRef.current
 
-    if (proxy) {
-      proxy.forceDisconnect()
-      syncStatus()
+    if (context) {
+      try {
+        await context.endCurrentSession(true)
+      } catch {
+        /* the session may already be gone */
+      }
+
+      sessionRef.current = null
+      setCastError("")
+      setChromecastState("disconnected")
       return
     }
 
@@ -319,9 +444,9 @@ export function useCast({ receiverAppId }: UseCastOptions = {}) {
     if (session) {
       void session.close().catch(() => {})
       presentationSessionRef.current = null
-      setStatus("disconnected")
+      setMiracastState("disconnected")
     }
-  }, [syncStatus])
+  }, [])
 
   const startMiracast = React.useCallback(async () => {
     if (typeof window === "undefined") return
@@ -344,17 +469,17 @@ export function useCast({ receiverAppId }: UseCastOptions = {}) {
       const stream = capture.call(video)
       await session.connection.send(stream)
 
-      setStatus("connected")
+      setMiracastState("connected")
       setDeviceName("Miracast display")
 
       session.addEventListener("terminate", () => {
         presentationSessionRef.current = null
         setDeviceName("")
-        setStatus("disconnected")
+        setMiracastState("unavailable")
       })
     } catch (error) {
       console.error("[useCast] Failed to start the Miracast session", error)
-      setStatus("disconnected")
+      setMiracastState("disconnected")
     }
   }, [mediaElement])
 
@@ -371,9 +496,13 @@ export function useCast({ receiverAppId }: UseCastOptions = {}) {
     supported: status !== "unavailable",
     /** True when at least one receiver is reachable over the local network. */
     hasReceiver: status === "disconnected" || status === "connected",
+    /** True when at least one Chromecast receiver is reachable. */
+    chromecastAvailable: chromecastState !== "unavailable",
     /** True when a Miracast display was reported by the Presentation API. */
-    miracastAvailable,
-    /** Starts a Chromecast session through Shaka's CastProxy. */
+    miracastAvailable: miracastState !== "unavailable",
+    /** Human readable reason of the last failed cast attempt. */
+    castError,
+    /** Starts a Chromecast session through the Cast Web Sender SDK. */
     startCasting,
     /** Mirrors the video to a Miracast display through the Presentation API. */
     startMiracast,

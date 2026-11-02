@@ -133,7 +133,7 @@ export const PREFETCH_BOOT = `
   }, { passive: true });
 
   document.addEventListener("pointerdown", function (event) {
-    if ((event as PointerEvent).pointerType === "mouse" && (event as PointerEvent).button !== 0) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
     onPointer(event.target);
   }, { passive: true });
 

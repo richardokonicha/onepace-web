@@ -89,22 +89,57 @@ export function useWatchProgress() {
   useEffect(() => {
     if (!episodeId || !mediaElement) return
 
-    const seekTime = loadProgress(episodeId as number)
-    if (seekTime != null && mediaElement.readyState >= 1) {
+    const epId = episodeId as number
+    let restored = false
+
+    const tryRestore = () => {
+      if (restored) return
+      if (mediaElement.readyState < 1) return
+
+      const seekTime = loadProgress(epId)
+      if (seekTime == null) {
+        restored = true
+        return
+      }
+
       seek(seekTime)
+
+      // The timeline only learns the duration once the metadata is parsed, so
+      // an early attempt can be a no-op. Keep retrying until the playhead
+      // actually moved.
+      if (Math.abs(mediaElement.currentTime - seekTime) < 1) return
+
+      restored = true
     }
+
+    const onMetadata = () => tryRestore()
+
+    mediaElement.addEventListener("loadedmetadata", onMetadata)
+    mediaElement.addEventListener("durationchange", onMetadata)
+    mediaElement.addEventListener("canplay", onMetadata)
+
+    const restoreTimer = window.setInterval(() => {
+      tryRestore()
+      if (restored) window.clearInterval(restoreTimer)
+    }, 100)
+
+    tryRestore()
 
     const onTimeUpdate = () => {
       const now = Date.now()
       if (now - lastSavedTimeRef.current >= SAVE_INTERVAL_MS) {
-        saveProgressNow(episodeId as number, mediaElement.currentTime, mediaElement.duration)
+        saveProgressNow(epId, mediaElement.currentTime, mediaElement.duration)
       }
     }
 
     mediaElement.addEventListener("timeupdate", onTimeUpdate)
     return () => {
+      window.clearInterval(restoreTimer)
+      mediaElement.removeEventListener("loadedmetadata", onMetadata)
+      mediaElement.removeEventListener("durationchange", onMetadata)
+      mediaElement.removeEventListener("canplay", onMetadata)
       mediaElement.removeEventListener("timeupdate", onTimeUpdate)
-      saveProgressNow(episodeId as number, mediaElement.currentTime, mediaElement.duration)
+      saveProgressNow(epId, mediaElement.currentTime, mediaElement.duration)
     }
   }, [episodeId, mediaElement, seek])
 
