@@ -50,8 +50,43 @@ async function hmacKey() {
   );
 }
 
+/**
+ * Expiry used for a signed payload.
+ *
+ * The upstream playback URLs carry their own `s` (issued at) and `e`
+ * (lifetime in seconds) parameters, so the same upstream URL always maps to
+ * the same expiry. Deriving it from the URL instead of the clock makes the
+ * token a pure function of its payload, which keeps the CDN key stable: the
+ * server-side warm-up and the browser then request the very same URL and
+ * share one cache entry.
+ *
+ * Payloads without upstream timing fall back to a bucketed clock, so an
+ * identical payload still yields an identical token inside the bucket.
+ */
+function payloadExpiry(payload: ProxyPayload, ttlSec: number): number {
+  const u = "u" in payload ? payload.u : undefined;
+  const now = Math.floor(Date.now() / 1000);
+  if (u) {
+    try {
+      const params = new URL(u).searchParams;
+      const issuedAt = Number(params.get("s"));
+      const lifetime = Number(params.get("e"));
+      if (Number.isFinite(issuedAt) && Number.isFinite(lifetime) && issuedAt > 1e9 && lifetime > 0) {
+        const upstreamExp = issuedAt + lifetime;
+        // Only trust the upstream expiry when it still has room to run, so a
+        // stale upstream token cannot shorten the proxy token below the
+        // fallback lifetime.
+        if (upstreamExp > now + 300) return upstreamExp;
+      }
+    } catch {
+      // Not a URL with upstream timing, fall through to the clock.
+    }
+  }
+  return Math.floor((now + ttlSec) / 300) * 300;
+}
+
 export async function signPayload(payload: ProxyPayload, ttlSec = 6 * 3600) {
-  const exp = Math.floor(Date.now() / 1000) + ttlSec;
+  const exp = payloadExpiry(payload, ttlSec);
   const body = toBase64Url(new TextEncoder().encode(JSON.stringify({ ...payload, exp })));
   const key = await hmacKey();
   const sig = toBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body))));

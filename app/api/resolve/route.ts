@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { getEpisodeLocal } from "@/lib/library";
 import { resolveParallel } from "@/lib/resolver";
 import { signPayload } from "@/lib/proxy";
 import { hlsCandidate, mp4Candidates } from "@/lib/candidates";
 import { cacheHeaders } from "@/lib/cache-headers";
+import { warmHlsChain, warmOrigin } from "@/lib/warm";
 import { errorMessage } from "@/lib/onepace";
 
 export const runtime = "edge";
@@ -33,12 +34,18 @@ export async function GET(req: NextRequest) {
     const candidates: unknown[] = [];
 
     if (session.hls) {
+      const token = await signPayload({ ep: ep.id, kind: "hls-master", u: session.hls.masterUrl });
+      const masterPath = `/api/proxy/hls?t=${token}`;
       candidates.push({
         type: "hls",
         quality: "900p",
         codec: "h264",
-        proxyUrl: `/api/proxy/hls?t=${await signPayload({ ep: ep.id, kind: "hls-master", u: session.hls.masterUrl })}`,
+        proxyUrl: masterPath,
       });
+      // Warm the playlist and leading segments in the background so the
+      // browser finds them in the CDN instead of fetching them cold.
+      const origin = warmOrigin(req);
+      after(() => warmHlsChain(origin, masterPath));
     }
 
     for (const extra of session.hlsExtra) {

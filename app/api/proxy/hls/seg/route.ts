@@ -41,7 +41,10 @@ export async function GET(req: NextRequest) {
   const respHeaders = new Headers();
   respHeaders.set("Access-Control-Allow-Origin", "*");
   respHeaders.set("Accept-Ranges", "bytes");
+  // The segment bytes never change for a given signed URL, so the edge
+  // network can hold them for the whole lifetime of the token.
   respHeaders.set("Cache-Control", "public, max-age=3600");
+  respHeaders.set("Vercel-CDN-Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
   const ct = res.headers.get("content-type");
   if (ct) respHeaders.set("Content-Type", ct);
   const cl = res.headers.get("content-length");
