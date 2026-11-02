@@ -1,0 +1,150 @@
+"use client"
+
+import * as React from "react"
+
+import type { VideoPlayerAsset } from "@/components/limeplay/video-player/player"
+
+import { useMediaApi } from "@/components/limeplay/video-player/lib/media-kit"
+import { useAsset, useAssetStore } from "@/hooks/limeplay/use-asset"
+import { useMediaStore } from "@/hooks/limeplay/use-media"
+import {
+  canMoveToNextMediaSessionTrack,
+  canMoveToPreviousMediaSessionTrack,
+  canStartMediaSessionPlayback,
+  getMediaSessionCurrentTime,
+  getMediaSessionMetadataValue,
+  getMediaSessionPlaybackState,
+  getMediaSessionPositionState,
+  isMediaSessionPlaylistSource,
+  useMediaSessionActionHandlers,
+  useMediaSessionSync,
+} from "@/hooks/limeplay/use-media-session"
+import {
+  canUsePictureInPicture,
+  usePictureInPictureStore,
+} from "@/hooks/limeplay/use-picture-in-picture"
+import { usePlaybackStore } from "@/hooks/limeplay/use-playback"
+import { usePlaybackRateStore } from "@/hooks/limeplay/use-playback-rate"
+import { useTimelineStore } from "@/hooks/limeplay/use-timeline"
+
+export function VideoMediaSessionController() {
+  const mediaApi = useMediaApi()
+  const { currentItem, hasNext, hasPrevious } = useAsset<VideoPlayerAsset>()
+  const currentTime = useTimelineStore((state) => state.currentTime)
+  const duration = useTimelineStore((state) => state.duration)
+  const pictureInPictureSupported = usePictureInPictureStore(
+    (state) => state.supported
+  )
+  const mediaElement = useMediaStore((state) => state.mediaElement)
+  const playbackRate = usePlaybackRateStore((state) => state.value)
+  const sourceType = useAssetStore((state) => state.sourceType)
+  const status = usePlaybackStore((state) => state.status)
+  const asset = currentItem?.properties ?? null
+  const active = asset !== null
+  const playlistSource = isMediaSessionPlaylistSource(sourceType)
+  const canEnterPictureInPicture =
+    active &&
+    canUsePictureInPicture({
+      mediaElement,
+      supported: pictureInPictureSupported,
+    })
+
+  const metadata = React.useMemo(
+    () => (asset ? getVideoMediaSessionMetadata(asset) : null),
+    [asset]
+  )
+  const position = React.useMemo(
+    () =>
+      status === "loading"
+        ? null
+        : getMediaSessionPositionState({
+            active,
+            currentTime,
+            duration,
+            playbackRate,
+          }),
+    [active, currentTime, duration, playbackRate, status]
+  )
+
+  const actions = useMediaSessionActionHandlers({
+    canEnterPictureInPicture,
+    canGoNext: playlistSource && hasNext,
+    canGoPrevious: playlistSource && hasPrevious,
+    getCurrentTime: () => {
+      const state = mediaApi.getState()
+
+      return getMediaSessionCurrentTime({
+        currentTime: state.timeline.currentTime,
+        isLive: state.timeline.isLive,
+        mediaElement: state.media.mediaElement,
+      })
+    },
+    getSeekRange: () => {
+      const state = mediaApi.getState()
+
+      return state.timeline.isLive ? state.player.instance?.seekRange() : null
+    },
+    onEnterPictureInPicture: () => {
+      void mediaApi.getState().pictureInPicture.enter()
+    },
+    onNextTrack: () => {
+      const state = mediaApi.getState()
+      if (
+        canMoveToNextMediaSessionTrack(state.asset.sourceType, state.playlist)
+      ) {
+        state.playlist.next()
+      }
+    },
+    onPause: () => {
+      mediaApi.getState().playback.pause()
+    },
+    onPlay: () => {
+      const state = mediaApi.getState()
+      if (!canStartMediaSessionPlayback(state.playback.status)) return
+
+      return state.playback.play()
+    },
+    onPreviousTrack: () => {
+      const state = mediaApi.getState()
+      if (
+        canMoveToPreviousMediaSessionTrack(
+          state.asset.sourceType,
+          state.playlist
+        )
+      ) {
+        state.playlist.previous()
+      }
+    },
+    onSeek: (time) => {
+      mediaApi.getState().timeline.seek(time)
+    },
+  })
+
+  useMediaSessionSync({
+    actions,
+    active,
+    claim: status === "playing",
+    metadata,
+    playbackState: getMediaSessionPlaybackState({ active, status }),
+    position,
+    positionKey: currentItem?.id ?? null,
+  })
+
+  return null
+}
+
+function getVideoMediaSessionMetadata(
+  asset: VideoPlayerAsset
+): MediaMetadataInit | null {
+  const title = getMediaSessionMetadataValue(asset.title)
+  const artist = getMediaSessionMetadataValue(asset.description, asset.year)
+  const poster = getMediaSessionMetadataValue(asset.poster)
+
+  if (!title && !artist && !poster) return null
+
+  return {
+    artist,
+    artwork: poster ? [{ sizes: "512x512", src: poster }] : [],
+    title,
+  }
+}

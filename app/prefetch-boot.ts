@@ -132,6 +132,14 @@ export const PREFETCH_BOOT = `
     onPointer(event.target);
   }, { passive: true });
 
+  document.addEventListener("pointerdown", function (event) {
+    onPointer(event.target);
+  }, { passive: true });
+
+  document.addEventListener("touchstart", function (event) {
+    onPointer(event.target);
+  }, { passive: true });
+
   window.__onePacePrefetch = {
     prefetch: function (id) {
       void chain(id);

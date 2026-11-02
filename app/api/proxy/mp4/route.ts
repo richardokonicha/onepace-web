@@ -73,6 +73,16 @@ export async function GET(req: NextRequest) {
     res = await tryFetch(u, range);
     if (res) break;
   }
+  if (!res && upstreamCandidates.length > 0) {
+    // pinned URL failed, try re-resolving once more
+    try {
+      const session = await resolveSession(payload.ep, seriesId, true);
+      const resolved = session.mp4[payload.q];
+      if (resolved && !upstreamCandidates.includes(resolved)) {
+        res = await tryFetch(resolved, range);
+      }
+    } catch {}
+  }
   if (!res) return NextResponse.json({ error: "stream unavailable" }, { status: 502 });
 
   const respHeaders = new Headers();

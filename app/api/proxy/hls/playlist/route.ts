@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { signPayload, verifyPayload } from "@/lib/proxy";
 import { errorMessage } from "@/lib/onepace";
+import { resolveRequestOrigin } from "@/lib/origin";
 
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
@@ -15,7 +16,7 @@ export async function GET(req: NextRequest) {
   if (!payload) return NextResponse.json({ error: "invalid or expired" }, { status: 403 });
   if (payload.kind !== "hls-playlist") return NextResponse.json({ error: "bad payload" }, { status: 400 });
 
-  const origin = new URL(req.url).origin;
+  const origin = resolveRequestOrigin(req);
   let text = "";
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);

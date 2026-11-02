@@ -25,6 +25,8 @@ export type StreamSession = {
   episodeId: number;
   seriesId: number;
   resolvedAt: number;
+  hlsAt: number;
+  mp4At: number;
   hls: HlsSession | null;
   mp4: Record<string, string>;
   hlsExtra: HlsCandidate[];
@@ -45,7 +47,12 @@ const watchPending: Map<string, Promise<WatchResp>> = (g.__onepaceWatchPending ?
 const sessions: Map<string, StreamSession> = (g.__onepaceSessions ??= new Map());
 
 const WATCH_TTL = 10 * 60 * 1000;
-const SESSION_TTL = 10 * 60 * 1000;
+// Upstream tokens remain valid for ~12h; keep HLS session much longer to
+// avoid CDN key churn from re-resolution. MP4 uses ephemeral tunnels so
+// keep it short.
+const HLS_SESSION_TTL = 6 * 60 * 60 * 1000;
+const MP4_SESSION_TTL = 10 * 60 * 1000;
+const SESSION_TTL = HLS_SESSION_TTL;
 
 /**
  * Merge a partial result into the cached session instead of overwriting it.
@@ -58,10 +65,13 @@ function updateSession(key: string, patch: Partial<StreamSession>): StreamSessio
   const notes = [...new Set([...(cur?.notes ?? []), ...(patch.notes ?? [])])];
   const mp4 = patch.mp4 && Object.keys(patch.mp4).length > 0 ? patch.mp4 : cur?.mp4 ?? {};
   const hlsExtra = patch.hlsExtra && patch.hlsExtra.length > 0 ? patch.hlsExtra : cur?.hlsExtra ?? [];
+  const now = Date.now();
   const session: StreamSession = {
     episodeId: patch.episodeId ?? cur?.episodeId ?? 0,
     seriesId: patch.seriesId ?? cur?.seriesId ?? 0,
-    resolvedAt: patch.resolvedAt ?? Date.now(),
+    resolvedAt: patch.resolvedAt ?? cur?.resolvedAt ?? now,
+    hlsAt: patch.hlsAt ?? (patch.hls && !cur?.hls ? now : cur?.hlsAt ?? now),
+    mp4At: patch.mp4At ?? (patch.mp4 && Object.keys(patch.mp4).length > 0 && (!cur?.mp4 || Object.keys(cur.mp4).length === 0) ? now : cur?.mp4At ?? now),
     hls: patch.hls ?? cur?.hls ?? null,
     mp4,
     hlsExtra,
@@ -394,7 +404,7 @@ export type Mp4Resolve = {
 export async function resolveHlsSession(episodeId: number, seriesId: number, force = false): Promise<FastResolve> {
   const key = `${seriesId}:${episodeId}`;
   const hit = sessions.get(key);
-  if (!force && hit && hit.hls && Date.now() - hit.resolvedAt < SESSION_TTL) {
+  if (!force && hit && hit.hls && Date.now() - (hit.hlsAt || hit.resolvedAt) < HLS_SESSION_TTL) {
     return { episodeId, seriesId, resolvedAt: hit.resolvedAt, hls: hit.hls, notes: hit.notes };
   }
 
@@ -454,7 +464,7 @@ async function resolveMp4Source(
 export async function resolveMp4Session(episodeId: number, seriesId: number, force = false): Promise<Mp4Resolve> {
   const key = `${seriesId}:${episodeId}`;
   const hit = sessions.get(key);
-  if (!force && hit && (Object.keys(hit.mp4).length > 0 || hit.hlsExtra.length > 0) && Date.now() - hit.resolvedAt < SESSION_TTL) {
+  if (!force && hit && (Object.keys(hit.mp4).length > 0 || hit.hlsExtra.length > 0) && Date.now() - (hit.mp4At || hit.resolvedAt) < MP4_SESSION_TTL) {
     return { episodeId, seriesId, resolvedAt: hit.resolvedAt, mp4: hit.mp4, hlsExtra: hit.hlsExtra, notes: hit.notes };
   }
 

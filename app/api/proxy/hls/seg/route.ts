@@ -41,10 +41,19 @@ export async function GET(req: NextRequest) {
   const respHeaders = new Headers();
   respHeaders.set("Access-Control-Allow-Origin", "*");
   respHeaders.set("Accept-Ranges", "bytes");
-  // The segment bytes never change for a given signed URL, so the edge
-  // network can hold them for the whole lifetime of the token.
-  respHeaders.set("Cache-Control", "public, max-age=3600");
-  respHeaders.set("Vercel-CDN-Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
+  if (res.status === 206) {
+    // A partial body must never be stored under the segment's URL: the
+    // edge network keys on the URL alone, so a cached 206 would be handed
+    // to every later client that asks for the whole segment. Cache only
+    // complete responses and let partial ones pass through untouched.
+    respHeaders.set("Cache-Control", "no-store");
+    respHeaders.set("Vercel-CDN-Cache-Control", "no-store");
+  } else {
+    // The segment bytes never change for a given signed URL, so the edge
+    // network can hold them for the whole lifetime of the token.
+    respHeaders.set("Cache-Control", "public, max-age=3600");
+    respHeaders.set("Vercel-CDN-Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
+  }
   const ct = res.headers.get("content-type");
   if (ct) respHeaders.set("Content-Type", ct);
   const cl = res.headers.get("content-length");

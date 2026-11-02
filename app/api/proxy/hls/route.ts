@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { signPayload, verifyPayload } from "@/lib/proxy";
 import { resolveSession } from "@/lib/resolver";
 import { errorMessage } from "@/lib/onepace";
+import { resolveRequestOrigin } from "@/lib/origin";
 
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
@@ -34,7 +35,7 @@ export async function GET(req: NextRequest) {
   if (payload.kind !== "hls-master") return NextResponse.json({ error: "bad payload" }, { status: 400 });
 
   const seriesId = 98;
-  const origin = new URL(req.url).origin;
+  const origin = resolveRequestOrigin(req);
 
   let masterUrl = payload.u;
   let text = "";
