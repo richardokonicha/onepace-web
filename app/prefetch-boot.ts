@@ -133,10 +133,12 @@ export const PREFETCH_BOOT = `
   }, { passive: true });
 
   document.addEventListener("pointerdown", function (event) {
+    if ((event as PointerEvent).pointerType === "mouse" && (event as PointerEvent).button !== 0) return;
     onPointer(event.target);
   }, { passive: true });
 
   document.addEventListener("touchstart", function (event) {
+    if (event.touches && event.touches.length > 1) return;
     onPointer(event.target);
   }, { passive: true });
 

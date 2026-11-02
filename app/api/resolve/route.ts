@@ -12,6 +12,23 @@ export const dynamic = "force-dynamic";
 
 const cache = new Map<string, { data: unknown; ts: number; masterPath?: string }>();
 const TTL = 6 * 60 * 60 * 1000;
+const MAX_CACHE = 200;
+
+function setCache(key: string, value: { data: unknown; ts: number; masterPath?: string }) {
+  if (cache.size >= MAX_CACHE) {
+    // evict oldest
+    let oldestKey: string | null = null;
+    let oldestTs = Infinity;
+    for (const [k, v] of cache.entries()) {
+      if (v.ts < oldestTs) {
+        oldestTs = v.ts;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) cache.delete(oldestKey);
+  }
+  cache.set(key, value);
+}
 
 export async function GET(req: NextRequest) {
   const id = Number(req.nextUrl.searchParams.get("id"));
@@ -64,7 +81,7 @@ export async function GET(req: NextRequest) {
       const hlsCand = candidates.find((c: any) => c.type === "hls") as any;
       masterPath = hlsCand?.proxyUrl;
     }
-    if (candidates.length > 0) cache.set(key, { data, ts: Date.now(), masterPath });
+    if (candidates.length > 0) setCache(key, { data, ts: Date.now(), masterPath });
     return NextResponse.json(data, { headers: cacheHeaders(true) });
   } catch (e: unknown) {
     console.error(e);
