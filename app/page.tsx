@@ -1,5 +1,6 @@
 import { getLibrary } from "@/lib/library";
 import { EpisodeCard } from "./episode-card";
+import { PREFETCH_BOOT } from "./prefetch-boot";
 
 export const dynamic = "force-dynamic";
 
@@ -7,6 +8,7 @@ export default async function Home() {
   const { arcs } = await getLibrary(98);
   return (
     <main className="min-h-screen bg-black text-white">
+      <script dangerouslySetInnerHTML={{ __html: PREFETCH_BOOT }} />
       <header className="border-b border-white/10 p-6">
         <h1 className="text-2xl font-semibold">One Pace</h1>
         <p className="text-white/60">Browse arcs and watch episodes</p>

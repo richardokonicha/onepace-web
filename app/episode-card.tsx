@@ -15,6 +15,7 @@ export function EpisodeCard({ id, label, name }: EpisodeCardProps) {
   return (
     <Link
       href={`/watch/${id}`}
+      data-episode-id={id}
       className="block border border-white/10 rounded overflow-hidden hover:border-white/40 focus:border-white/60 focus:outline-none"
       onMouseEnter={schedulePrefetch}
       onMouseLeave={cancelPrefetch}

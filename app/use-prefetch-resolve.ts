@@ -2,13 +2,65 @@
 
 import { useCallback, useEffect, useRef } from "react";
 
-const prefetched = new Set<string>();
+type PrefetchBridge = {
+  prefetch: (episodeId: number) => void;
+  cancel: () => void;
+};
+
+declare global {
+  interface Window {
+    __onePacePrefetch?: PrefetchBridge;
+  }
+}
+
+/**
+ * Starts the playback prefetch for an episode.
+ *
+ * The actual chain lives in the bootstrap script that is inlined into the
+ * document, because a pointer can reach a card before React has hydrated
+ * and that first interaction would otherwise be lost. When the bridge is
+ * available the work is shared with it; otherwise the hook falls back to
+ * walking the chain itself.
+ */
+export function usePrefetchResolve(episodeId: number) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const prefetch = useCallback(() => {
+    if (!Number.isFinite(episodeId) || episodeId <= 0) return;
+    const bridge = typeof window !== "undefined" ? window.__onePacePrefetch : undefined;
+    if (bridge) {
+      bridge.prefetch(episodeId);
+      return;
+    }
+    void prefetchChain(episodeId);
+  }, [episodeId]);
+
+  const schedulePrefetch = useCallback(() => {
+    if (timer.current) return;
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      prefetch();
+    }, 120);
+  }, [prefetch]);
+
+  const cancelPrefetch = useCallback(() => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    const bridge = typeof window !== "undefined" ? window.__onePacePrefetch : undefined;
+    bridge?.cancel();
+  }, []);
+
+  useEffect(() => cancelPrefetch, [cancelPrefetch]);
+
+  return { prefetch, schedulePrefetch, cancelPrefetch };
+}
 
 type ResolveResponse = {
   candidates?: { type?: string; proxyUrl?: string }[];
 };
 
-/** Pulls a URL and discards the body, leaving it in the browser cache. */
 async function touch(url: string): Promise<string | null> {
   try {
     const res = await fetch(url);
@@ -19,14 +71,13 @@ async function touch(url: string): Promise<string | null> {
   }
 }
 
-async function touchBinary(url: string): Promise<boolean> {
+async function drain(url: string): Promise<void> {
   try {
     const res = await fetch(url);
-    if (!res.ok) return false;
+    if (!res.ok) return;
     await res.arrayBuffer();
-    return true;
   } catch {
-    return false;
+    return;
   }
 }
 
@@ -41,84 +92,30 @@ function firstUrls(text: string, limit: number): string[] {
   return out;
 }
 
-/**
- * Walks the playback chain the way the player does: resolve, master
- * playlist, media playlist. Every hop lands in the browser cache, so the
- * player starts from a warm cache instead of waiting on the network.
- */
-async function prefetchChain(episodeId: number): Promise<string[]> {
+async function prefetchChain(episodeId: number): Promise<void> {
   const resolve = await touch(`/api/resolve?id=${episodeId}`);
-  if (!resolve) return [];
+  if (!resolve) return;
 
   let masterPath: string | undefined;
   try {
     const data = JSON.parse(resolve) as ResolveResponse;
     masterPath = data.candidates?.find((c) => c.type === "hls")?.proxyUrl;
   } catch {
-    return [];
+    return;
   }
-  if (!masterPath) return [];
+  if (!masterPath) return;
 
   const master = await touch(masterPath);
-  if (!master) return [];
+  if (!master) return;
 
   const playlistPath = firstUrls(master, 1)[0];
-  if (!playlistPath) return [];
+  if (!playlistPath) return;
 
   const playlist = await touch(playlistPath);
-  if (!playlist) return [];
+  if (!playlist) return;
 
-  return firstUrls(playlist, 1);
-}
-
-export function usePrefetchResolve(episodeId: number) {
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const segmentTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const segments = useRef<string[]>([]);
-
-  const cancelPrefetch = useCallback(() => {
-    if (timer.current) {
-      clearTimeout(timer.current);
-      timer.current = null;
-    }
-    if (segmentTimer.current) {
-      clearTimeout(segmentTimer.current);
-      segmentTimer.current = null;
-    }
-  }, []);
-
-  const prefetch = useCallback(() => {
-    if (!Number.isFinite(episodeId) || episodeId <= 0) return;
-    const key = `ep:${episodeId}`;
-    if (prefetched.has(key)) return;
-    prefetched.add(key);
-
-    void prefetchChain(episodeId)
-      .then((found) => {
-        segments.current = found;
-        // Pull the leading segment only once the pointer has rested on the
-        // card. It is several megabytes, so a quick pass over the grid must
-        // not trigger it.
-        if (segmentTimer.current) clearTimeout(segmentTimer.current);
-        segmentTimer.current = setTimeout(() => {
-          segmentTimer.current = null;
-          void Promise.all(segments.current.map((s) => touchBinary(s)));
-        }, 700);
-      })
-      .catch(() => {
-        prefetched.delete(key);
-      });
-  }, [episodeId]);
-
-  const schedulePrefetch = useCallback(() => {
-    if (timer.current) return;
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      prefetch();
-    }, 120);
-  }, [prefetch]);
-
-  useEffect(() => cancelPrefetch, [cancelPrefetch]);
-
-  return { prefetch, schedulePrefetch, cancelPrefetch };
+  const segments = firstUrls(playlist, 1);
+  setTimeout(() => {
+    for (const segment of segments) void drain(segment);
+  }, 700);
 }
