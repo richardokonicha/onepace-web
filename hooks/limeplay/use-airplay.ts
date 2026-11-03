@@ -4,6 +4,10 @@ import * as React from "react"
 
 import { useAssetStore } from "@/hooks/limeplay/use-asset"
 import { useMediaStore } from "@/hooks/limeplay/use-media"
+import {
+  isPlaybackPausedByApp,
+  markPlaybackStartedByApp,
+} from "@/hooks/limeplay/use-playback"
 import { isLoopbackHostname, withOrigin } from "@/lib/origin"
 
 /**
@@ -144,16 +148,6 @@ function releaseWakeLock(): void {
 }
 
 /**
- * How long after the page was hidden a pause still counts as one the
- * browser caused on its own.
- *
- * Safari pauses the media element right after the page is backgrounded. A
- * pause that happens much later was asked for by the user, usually from the
- * lock screen, and must not be undone.
- */
-const BACKGROUND_PAUSE_WINDOW_MS = 3000
-
-/**
  * Resumes a routed element that is paused.
  *
  * Safari tears the wireless route down again when the element stays
@@ -164,30 +158,39 @@ function resumeRoutedPlayback(video: WebKitPlaybackTargetElement): void {
   if (video.webkitCurrentPlaybackTargetIsWireless !== true) return
   if (!video.paused) return
 
+  markPlaybackStartedByApp()
+  void video.play().catch(() => {})
+}
+
+/**
+ * Resumes a routed element that is paused although the app did not ask for it.
+ *
+ * The browser pauses the media element when the page is backgrounded or the
+ * screen locks. The element stops feeding the receiver at that point, the
+ * receiver runs out of media and the wireless route is dropped.
+ *
+ * The pause is undone whenever it happens while the page is in the
+ * background, because the receiver should keep playing while the user works
+ * in another app. A pause that the app asked for is left alone, so the
+ * playback stays under the control of the user.
+ */
+function resumeUnrequestedPause(video: WebKitPlaybackTargetElement): void {
+  if (video.webkitCurrentPlaybackTargetIsWireless !== true) return
+  if (!video.paused) return
+  if (isPlaybackPausedByApp()) return
+
+  markPlaybackStartedByApp()
   void video.play().catch(() => {})
 }
 
 /**
  * Resumes a routed element that the browser paused while the page was
  * backgrounded.
- *
- * Safari pauses the media element when the page is backgrounded or the
- * screen locks. The element stops feeding the receiver at that point, the
- * receiver runs out of media and the wireless route is dropped.
- *
- * Only a pause that follows the backgrounding within a short window is
- * undone, so a pause the user asks for later stays untouched.
  */
-function resumeBackgroundedPlayback(
-  video: WebKitPlaybackTargetElement,
-  hiddenAt: number
-): void {
-  if (video.webkitCurrentPlaybackTargetIsWireless !== true) return
-  if (!video.paused) return
+function resumeBackgroundedPlayback(video: WebKitPlaybackTargetElement): void {
   if (typeof document !== "undefined" && !document.hidden) return
-  if (Date.now() - hiddenAt > BACKGROUND_PAUSE_WINDOW_MS) return
 
-  void video.play().catch(() => {})
+  resumeUnrequestedPause(video)
 }
 
 /**
@@ -235,28 +238,28 @@ function subscribeToAirplay(
     onStoreChange()
   }
 
-  // Safari pauses the element shortly after the page is backgrounded. The
-  // moment the page was hidden tells a browser caused pause apart from one
-  // the user asked for.
-  let hiddenAt = 0
-
+  // Safari pauses the element shortly after the page was backgrounded, so the
+  // pause handler takes care of it. This only covers a pause that already
+  // happened.
   const handlePause = () => {
-    resumeBackgroundedPlayback(video, hiddenAt)
+    resumeBackgroundedPlayback(video)
   }
 
   const handleVisibilityChanged = () => {
     if (document.hidden) {
-      hiddenAt = Date.now()
-      resumeBackgroundedPlayback(video, hiddenAt)
+      resumeBackgroundedPlayback(video)
       return
     }
-
-    hiddenAt = 0
 
     // A wake lock is released whenever the page is hidden, so it has to be
     // taken again as soon as the page comes back.
     if (video.webkitCurrentPlaybackTargetIsWireless === true) {
       void acquireWakeLock()
+
+      // A resume can be refused while the page is hidden, so the playback is
+      // started again once the page is back. A pause that the user asked for
+      // is left alone.
+      resumeUnrequestedPause(video)
     }
   }
 

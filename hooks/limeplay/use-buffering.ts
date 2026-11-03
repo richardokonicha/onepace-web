@@ -130,7 +130,10 @@ function BufferingSetup() {
   }, [mediaElement, store])
 
   React.useEffect(() => {
-    if (!player) return
+    if (!player) {
+      store.getState().buffering.setBuffering(false)
+      return
+    }
 
     const handleBuffering = () => {
       const isBuffering = player.isBuffering()

@@ -7,8 +7,11 @@ import type shaka from "shaka-player"
  * A deep buffer absorbs short network hiccups and bitrate switches without
  * the playback stalling. The player only downloads what it needs to reach
  * this goal, so the bytes stay under the control of Shaka.
+ *
+ * Five minutes of media is roughly 75 MB at the bitrate of the One Pace
+ * streams, so the buffer is kept on the device and not in memory forever.
  */
-export const BUFFERING_GOAL_SECONDS = 120
+export const BUFFERING_GOAL_SECONDS = 300
 
 /**
  * How much media the player buffers after a stall, in seconds.

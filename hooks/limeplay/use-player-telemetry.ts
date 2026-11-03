@@ -43,9 +43,11 @@ export function usePlayerTelemetry(intervalMs = 1000): PlayerTelemetry {
   const status = usePlaybackStore((state) => state.status)
   const bufferedAhead = useBufferingStore((state) => state.bufferedAhead)
 
-  const [telemetry, setTelemetry] = React.useState<PlayerTelemetry>(
-    EMPTY_TELEMETRY
-  )
+  // The buffered seconds are measured by the buffering feature and merged
+  // into the sampled telemetry, so they are not part of the sample itself.
+  const [telemetry, setTelemetry] = React.useState<
+    Omit<PlayerTelemetry, "bufferedAhead">
+  >(EMPTY_TELEMETRY)
 
   const previousBytesRef = React.useRef<null | number>(null)
   const previousTimeRef = React.useRef<null | number>(null)
@@ -84,7 +86,6 @@ export function usePlayerTelemetry(intervalMs = 1000): PlayerTelemetry {
 
         setTelemetry({
           bandwidth: Number(stats.estimatedBandwidth) || 0,
-          bufferedAhead: 0,
           decodedFrames: Number(stats.decodedFrames) || 0,
           droppedFrames: Number(stats.droppedFrames) || 0,
           throughput,

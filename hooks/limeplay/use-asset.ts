@@ -788,6 +788,12 @@ export function assetFeature(): MediaFeature<
             const err = toError(error)
             events.emit("assetpreloaderror", { asset, error: err })
             console.error("[useAsset] Preload error:", error)
+          } finally {
+            set(({ asset }) => {
+              if (asset.preloadAbortControllers[assetId] === abortController) {
+                delete asset.preloadAbortControllers[assetId]
+              }
+            })
           }
         },
         preloadNext: async () => {

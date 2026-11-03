@@ -2,9 +2,16 @@
 
 import { useEffect, useRef } from "react"
 
-import { useMediaEvents } from "@/components/limeplay/media-provider"
+import {
+  useMediaEvents,
+  useMediaFeatureApi,
+} from "@/components/limeplay/media-provider"
 import type { AssetEvents } from "@/hooks/limeplay/use-asset"
-import { usePlaylistStore } from "@/hooks/limeplay/use-playlist"
+import {
+  PLAYLIST_FEATURE_KEY,
+  type PlaylistStore,
+  usePlaylistStore,
+} from "@/hooks/limeplay/use-playlist"
 import { useMediaStore } from "@/hooks/limeplay/use-media"
 import { useTimelineStore } from "@/hooks/limeplay/use-timeline"
 import {
@@ -74,6 +81,7 @@ export function useWatchProgress() {
   const mediaElement = useMediaStore((media) => media.mediaElement)
   const seek = useTimelineStore((timeline) => timeline.seek)
   const events = useMediaEvents<AssetEvents>()
+  const playlistApi = useMediaFeatureApi<PlaylistStore>(PLAYLIST_FEATURE_KEY)
 
   const lastSavedTimeRef = useRef<number>(0)
 
@@ -94,6 +102,10 @@ export function useWatchProgress() {
     // the live playhead, so a load that rewinds the playhead cannot be
     // mistaken for a deliberate restart.
     let lastKnownTime = 0
+    // The duration that belongs to the position above. The media element
+    // reports the duration of the next episode as soon as the playlist moves
+    // on, so the duration has to be captured with the position.
+    let lastKnownDuration = 0
     let attempts = 0
     let seeks = 0
     // The player rewinds the playhead when it attaches the media source, so
@@ -101,15 +113,33 @@ export function useWatchProgress() {
     // would be undone by the load and the episode would start over.
     let assetLoaded = false
 
+    /**
+     * Whether the media element still plays the episode of this effect.
+     *
+     * The player reuses the same media element for every episode, so the live
+     * playhead and duration belong to the next episode as soon as the
+     * playlist moves on. The values that were seen while this episode was
+     * playing are used instead of the live ones once that happened.
+     */
+    const isCurrentEpisode = () => {
+      const currentEpisodeId = playlistApi.getState().playlist.currentItem
+        ?.properties?.episodeId as number | undefined
+
+      return currentEpisodeId === epId
+    }
+
     const tryRestore = () => {
       if (restored) return
       if (!assetLoaded) return
+      if (!isCurrentEpisode()) return
       if (mediaElement.readyState < 1) return
 
       const seekTime = loadProgress(epId)
       if (seekTime == null) {
         restored = true
         restoreCompleted = true
+        lastKnownTime = mediaElement.currentTime
+        lastKnownDuration = mediaElement.duration
         return
       }
 
@@ -122,6 +152,8 @@ export function useWatchProgress() {
       ) {
         restored = true
         restoreCompleted = true
+        lastKnownTime = mediaElement.currentTime
+        lastKnownDuration = mediaElement.duration
         return
       }
 
@@ -142,7 +174,14 @@ export function useWatchProgress() {
       seek(seekTime)
     }
 
-    const onMetadata = () => tryRestore()
+    const onMetadata = () => {
+      if (!isCurrentEpisode()) return
+
+      // Before the asset is loaded the element still reports the metadata of
+      // the previous episode, so the duration is not taken over yet.
+      if (assetLoaded) lastKnownDuration = mediaElement.duration
+      tryRestore()
+    }
 
     mediaElement.addEventListener("loadedmetadata", onMetadata)
     mediaElement.addEventListener("durationchange", onMetadata)
@@ -189,6 +228,7 @@ export function useWatchProgress() {
 
     const offAssetLoaded = events.on("assetloaded", () => {
       assetLoaded = true
+      lastKnownDuration = mediaElement.duration
       tryRestore()
     })
 
@@ -210,15 +250,47 @@ export function useWatchProgress() {
     }
 
     const onTimeUpdate = () => {
+      if (!isCurrentEpisode()) return
+      // The playhead still belongs to the previous episode until the asset of
+      // this episode is loaded, so nothing is written before that.
+      if (!assetLoaded) return
+
       lastKnownTime = mediaElement.currentTime
+      lastKnownDuration = mediaElement.duration
       const now = Date.now()
       if (now - lastSavedTimeRef.current < SAVE_INTERVAL_MS) return
       lastSavedTimeRef.current = now
       clearRestartedProgress()
-      writeProgressNow(epId, lastKnownTime, mediaElement.duration)
+      writeProgressNow(epId, lastKnownTime, lastKnownDuration)
+    }
+
+    /**
+     * Writes the position of the episode to the storage.
+     *
+     * The live playhead is only used while the media element still plays this
+     * episode. After the playlist moved on the element already reports the
+     * next episode, so the position that was seen while this episode played
+     * is written instead.
+     */
+    const flushProgress = () => {
+      const isCurrent = isCurrentEpisode() && assetLoaded
+      const currentTime = isCurrent ? mediaElement.currentTime : lastKnownTime
+      const duration = isCurrent ? mediaElement.duration : lastKnownDuration
+
+      writeProgressNow(epId, currentTime, duration)
+    }
+
+    // A closing tab or a hard navigation does not run the cleanup of the
+    // effect in time, so the position is written when the page is hidden.
+    const onPageHide = () => flushProgress()
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") flushProgress()
     }
 
     mediaElement.addEventListener("timeupdate", onTimeUpdate)
+    window.addEventListener("pagehide", onPageHide)
+    document.addEventListener("visibilitychange", onVisibilityChange)
+
     return () => {
       if (restoreTimer) {
         window.clearInterval(restoreTimer)
@@ -230,8 +302,10 @@ export function useWatchProgress() {
       mediaElement.removeEventListener("durationchange", onMetadata)
       mediaElement.removeEventListener("canplay", onMetadata)
       mediaElement.removeEventListener("timeupdate", onTimeUpdate)
+      window.removeEventListener("pagehide", onPageHide)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
       clearRestartedProgress()
-      writeProgressNow(epId, mediaElement.currentTime, mediaElement.duration)
+      flushProgress()
     }
-  }, [episodeId, mediaElement, seek, events])
+  }, [episodeId, mediaElement, playlistApi, seek, events])
 }

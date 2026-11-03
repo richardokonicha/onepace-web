@@ -48,9 +48,7 @@ export function usePlayerShortcuts(): void {
 
       const activeElement = document.activeElement
       const playerHasFocus =
-        activeElement === null || activeElement === document.body
-          ? true
-          : container.contains(activeElement)
+        activeElement !== null && container.contains(activeElement)
 
       if (!playerHasFocus) return
 

@@ -21,7 +21,10 @@ export function EpisodeCard({ id, label, name }: EpisodeCardProps) {
   // changes.
   const percent = useSyncExternalStore(
     subscribeToProgress,
-    () => getEpisodeProgressPercent(id)
+    () => getEpisodeProgressPercent(id),
+    // The server has no access to the storage, so the card starts without a
+    // progress bar and picks the stored position up after the hydration.
+    () => 0
   );
 
   return (

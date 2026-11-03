@@ -38,6 +38,37 @@ export type MediaReadyState =
 
 export const PLAYBACK_FEATURE_KEY = "playback"
 
+/**
+ * Whether the app paused the playback on purpose.
+ *
+ * The AirPlay route keeps the playback alive while the page is in the
+ * background. A pause that the app asked for must not be undone, so the
+ * intent is remembered instead of being derived from the playhead, which
+ * cannot tell a pause of the user apart from one of the browser.
+ */
+let playbackPausedByApp = false
+
+/**
+ * Marks that the app paused the playback on purpose.
+ */
+export function markPlaybackPausedByApp(): void {
+  playbackPausedByApp = true
+}
+
+/**
+ * Marks that the app started the playback on purpose.
+ */
+export function markPlaybackStartedByApp(): void {
+  playbackPausedByApp = false
+}
+
+/**
+ * Whether the app paused the playback on purpose.
+ */
+export function isPlaybackPausedByApp(): boolean {
+  return playbackPausedByApp
+}
+
 export interface PlaybackEvents {
   buffering: { isBuffering: boolean }
   ended: void
@@ -81,6 +112,7 @@ export function playbackFeature(): MediaFeature<PlaybackStore> {
           const media = get().media.mediaElement
           if (!media) return
 
+          markPlaybackPausedByApp()
           media.pause()
 
           set(({ media: mediaState }) => {
@@ -91,6 +123,8 @@ export function playbackFeature(): MediaFeature<PlaybackStore> {
         play: async () => {
           const media = get().media.mediaElement
           if (!media) return
+
+          markPlaybackStartedByApp()
 
           set(({ media: mediaState }) => {
             mediaState.idle = false
@@ -124,6 +158,7 @@ export function playbackFeature(): MediaFeature<PlaybackStore> {
           const prevStatus = get().playback.status
 
           if (media && !media.paused) {
+            markPlaybackPausedByApp()
             media.pause()
           }
 
@@ -249,6 +284,10 @@ function PlaybackSetup() {
 
     const playHandler = () => {
       const prevStatus = store.getState().playback.status
+
+      // The element is playing again, so the app is not holding the playback
+      // in a paused state anymore.
+      markPlaybackStartedByApp()
 
       store.setState(({ playback }) => {
         playback.paused = false

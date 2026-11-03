@@ -74,6 +74,10 @@ interface CastContext {
   endCurrentSession: (stopCasting?: boolean) => Promise<void>
   getCastState: () => string
   getCurrentSession: () => CastSession | null
+  removeEventListener: (
+    type: string,
+    listener: (event: { castState: string }) => void
+  ) => void
   requestSession: () => Promise<CastSession>
   setOptions: (options: {
     autoJoinPolicy?: string
@@ -311,6 +315,13 @@ export function useCast({ receiverAppId }: UseCastOptions = {}) {
   // Chromecast discovery and session handling through the Cast SDK.
   React.useEffect(() => {
     let cancelled = false
+    // The context is a singleton, so its listener has to be removed when the
+    // effect ends. Otherwise it survives the unmount and every remount adds
+    // another listener to the same context.
+    let castContext: null | CastContext = null
+    let castStateChangedType: null | string = null
+    let onCastStateChanged: null | ((event: { castState: string }) => void) =
+      null
 
     const setup = async () => {
       const ready = await loadCastSenderSdk()
@@ -324,6 +335,8 @@ export function useCast({ receiverAppId }: UseCastOptions = {}) {
 
       const context = framework.CastContext.getInstance()
       contextRef.current = context
+      castContext = context
+      castStateChangedType = framework.CastContextEventType.CAST_STATE_CHANGED
 
       context.setOptions({
         receiverApplicationId: receiverAppId ?? DEFAULT_CAST_RECEIVER_APP_ID,
@@ -353,10 +366,11 @@ export function useCast({ receiverAppId }: UseCastOptions = {}) {
         }
       }
 
-      context.addEventListener(
-        framework.CastContextEventType.CAST_STATE_CHANGED,
-        (event) => applyState(event.castState)
-      )
+      const listener = (event: { castState: string }) =>
+        applyState(event.castState)
+      onCastStateChanged = listener
+
+      context.addEventListener(castStateChangedType, listener)
 
       applyState(context.getCastState())
     }
@@ -365,6 +379,12 @@ export function useCast({ receiverAppId }: UseCastOptions = {}) {
 
     return () => {
       cancelled = true
+      if (castContext && castStateChangedType && onCastStateChanged) {
+        castContext.removeEventListener(
+          castStateChangedType,
+          onCastStateChanged
+        )
+      }
     }
   }, [receiverAppId])
 

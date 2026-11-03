@@ -122,7 +122,6 @@ export function usePlayer<TAsset extends { id: string }>(
 ) {
   const store = useMediaFeatureApi<PlayerStore>(PLAYER_FEATURE_KEY)
   const player = usePlayerStore((state) => state.instance)
-  const mediaElement = useMediaStore((state) => state.mediaElement)
 
   const load = React.useCallback(
     async (asset: TAsset, startTime?: number): Promise<boolean> => {
@@ -148,9 +147,12 @@ export function usePlayer<TAsset extends { id: string }>(
             preloadManager,
             startTime
           )
-          preloadManagers.delete(asset.id)
+          // The map of the store is copied before it is changed, so the
+          // collection that the subscribers hold is never mutated in place.
+          const updated = new Map(preloadManagers)
+          updated.delete(asset.id)
           store.setState(({ player }) => {
-            player.preloadManagers = new Map(preloadManagers)
+            player.preloadManagers = updated
           })
         } else {
           await options.onLoad(
@@ -173,7 +175,7 @@ export function usePlayer<TAsset extends { id: string }>(
         return false
       }
     },
-    [mediaElement, options, store]
+    [options, store]
   )
 
   const preload = React.useCallback(
@@ -187,9 +189,12 @@ export function usePlayer<TAsset extends { id: string }>(
         const manager = await options.onPreload(asset, currentPlayer)
         if (manager) {
           const preloadManagers = store.getState().player.preloadManagers
-          preloadManagers.set(asset.id, manager)
+          // The map of the store is copied before it is changed, so the
+          // collection that the subscribers hold is never mutated in place.
+          const updated = new Map(preloadManagers)
+          updated.set(asset.id, manager)
           store.setState(({ player }) => {
-            player.preloadManagers = new Map(preloadManagers)
+            player.preloadManagers = updated
           })
         }
       } catch (error) {
@@ -207,9 +212,12 @@ export function usePlayer<TAsset extends { id: string }>(
       const manager = preloadManagers.get(assetId)
       if (manager) {
         manager.destroy()
-        preloadManagers.delete(assetId)
+        // The map of the store is copied before it is changed, so the
+        // collection that the subscribers hold is never mutated in place.
+        const updated = new Map(preloadManagers)
+        updated.delete(assetId)
         store.setState(({ player }) => {
-          player.preloadManagers = new Map(preloadManagers)
+          player.preloadManagers = updated
         })
       }
     },
@@ -350,6 +358,7 @@ function PlayerSetup() {
 
       if (isBuffering) {
         store.setState(({ playback }) => {
+          if (playback.status === "error") return
           playback.status = "buffering"
         })
       } else {
@@ -357,6 +366,7 @@ function PlayerSetup() {
         const media = store.getState().media.mediaElement
         if (media) {
           store.setState(({ playback }) => {
+            if (playback.status === "error") return
             playback.status = media.paused ? "paused" : "playing"
           })
         }
