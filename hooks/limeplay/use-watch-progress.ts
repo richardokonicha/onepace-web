@@ -13,7 +13,6 @@ import {
   readProgressMap,
   removeProgress,
   writeProgress,
-  type WatchProgress,
 } from "@/lib/watch-progress"
 
 /** How often the restore is retried while the metadata is still missing. */
@@ -48,13 +47,15 @@ function loadProgress(epId: number): number | null {
   return progress.currentTime
 }
 
-function saveProgressNow(epId: number, currentTime: number, duration: number) {
-  // A deliberate restart back to the start leaves the old position behind,
-  // so the stale entry is cleared instead of being left to restore again.
-  if (currentTime < MIN_PROGRESS_SECONDS) {
-    removeProgress(epId)
-    return
-  }
+/**
+ * Writes the position of an episode to the storage.
+ *
+ * A position below the threshold is not worth storing, so it is left alone
+ * here. The stale entry of an episode that was played from the start again
+ * is removed by the caller instead.
+ */
+function writeProgressNow(epId: number, currentTime: number, duration: number) {
+  if (currentTime < MIN_PROGRESS_SECONDS) return
   if (duration <= 0) return
   if (currentTime >= duration - COMPLETED_MARGIN_SECONDS) {
     removeProgress(epId)
@@ -80,7 +81,19 @@ export function useWatchProgress() {
     if (!episodeId || !mediaElement) return
 
     const epId = episodeId as number
+    // Every episode saves on its own schedule, so the throttle starts over
+    // when the effect runs for a new episode.
+    lastSavedTimeRef.current = 0
     let restored = false
+    // Whether the restore reached its target. The stale position of an
+    // episode that was played from the start again is only removed once the
+    // restore settled, because until then the playhead is still at 0 and the
+    // stored position is the one that is about to be restored.
+    let restoreCompleted = false
+    // The last position that was seen during playback. It is used instead of
+    // the live playhead, so a load that rewinds the playhead cannot be
+    // mistaken for a deliberate restart.
+    let lastKnownTime = 0
     let attempts = 0
     let seeks = 0
     // The player rewinds the playhead when it attaches the media source, so
@@ -96,6 +109,7 @@ export function useWatchProgress() {
       const seekTime = loadProgress(epId)
       if (seekTime == null) {
         restored = true
+        restoreCompleted = true
         return
       }
 
@@ -107,6 +121,7 @@ export function useWatchProgress() {
         RESTORE_TOLERANCE_SECONDS
       ) {
         restored = true
+        restoreCompleted = true
         return
       }
 
@@ -167,6 +182,7 @@ export function useWatchProgress() {
     const offAssetLoadStart = events.on("assetloadstart", () => {
       assetLoaded = false
       restored = false
+      restoreCompleted = false
       seeks = 0
       startRestoreWindow()
     })
@@ -179,11 +195,27 @@ export function useWatchProgress() {
     startRestoreWindow()
     tryRestore()
 
+    /**
+     * Removes the stored position of an episode that was played from the
+     * start again.
+     *
+     * The clear only runs once the restore settled. Until then the playhead
+     * is still at 0 because the restore has not landed yet, and removing the
+     * entry then would wipe the position that is about to be restored.
+     */
+    const clearRestartedProgress = () => {
+      if (!restoreCompleted) return
+      if (lastKnownTime >= MIN_PROGRESS_SECONDS) return
+      removeProgress(epId)
+    }
+
     const onTimeUpdate = () => {
+      lastKnownTime = mediaElement.currentTime
       const now = Date.now()
-      if (now - lastSavedTimeRef.current >= SAVE_INTERVAL_MS) {
-        saveProgressNow(epId, mediaElement.currentTime, mediaElement.duration)
-      }
+      if (now - lastSavedTimeRef.current < SAVE_INTERVAL_MS) return
+      lastSavedTimeRef.current = now
+      clearRestartedProgress()
+      writeProgressNow(epId, lastKnownTime, mediaElement.duration)
     }
 
     mediaElement.addEventListener("timeupdate", onTimeUpdate)
@@ -198,17 +230,8 @@ export function useWatchProgress() {
       mediaElement.removeEventListener("durationchange", onMetadata)
       mediaElement.removeEventListener("canplay", onMetadata)
       mediaElement.removeEventListener("timeupdate", onTimeUpdate)
-      saveProgressNow(epId, mediaElement.currentTime, mediaElement.duration)
+      clearRestartedProgress()
+      writeProgressNow(epId, mediaElement.currentTime, mediaElement.duration)
     }
   }, [episodeId, mediaElement, seek, events])
-
-  return { loadProgress, saveProgressNow, clearProgress: removeProgress }
-}
-
-export function getWatchProgress(episodeId: number): WatchProgress | null {
-  return readProgressMap()[episodeId] ?? null
-}
-
-export function clearWatchProgress(episodeId: number) {
-  removeProgress(episodeId)
 }

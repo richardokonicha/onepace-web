@@ -73,6 +73,17 @@ export function getProgressPercent(
 }
 
 /**
+ * How much of a single episode was watched, as a rounded percentage.
+ *
+ * The library uses this as the snapshot of a `useSyncExternalStore`
+ * subscription, so a card only re-renders when its own percentage changes
+ * instead of whenever any episode changes.
+ */
+export function getEpisodeProgressPercent(episodeId: number): number {
+  return getProgressPercent(readProgressMap()[episodeId]);
+}
+
+/**
  * Stores the position of an episode.
  *
  * The change is announced so the library picks it up without a reload.

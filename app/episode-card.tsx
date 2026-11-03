@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { getProgressPercent } from "@/lib/watch-progress";
+import { useSyncExternalStore } from "react";
+import {
+  getEpisodeProgressPercent,
+  subscribeToProgress,
+} from "@/lib/watch-progress";
 import { usePrefetchResolve } from "./use-prefetch-resolve";
-import { useWatchProgressMap } from "./watch-progress-provider";
 
 type EpisodeCardProps = {
   id: number;
@@ -13,8 +16,13 @@ type EpisodeCardProps = {
 
 export function EpisodeCard({ id, label, name }: EpisodeCardProps) {
   const { prefetch, schedulePrefetch, cancelPrefetch } = usePrefetchResolve(id);
-  const progress = useWatchProgressMap()[id];
-  const percent = getProgressPercent(progress);
+  // The card subscribes to its own episode instead of the whole progress
+  // map, so the library does not re-render every card whenever any episode
+  // changes.
+  const percent = useSyncExternalStore(
+    subscribeToProgress,
+    () => getEpisodeProgressPercent(id)
+  );
 
   return (
     <Link
