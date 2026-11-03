@@ -113,6 +113,7 @@ export interface MediaFeature<
  * ```
  */
 export type MediaStoreFromFeatures<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TFeatures extends readonly MediaFeature<any, any>[],
 > = Simplify<
   MediaStore & UnionToIntersection<SliceFromFeature<TFeatures[number]>>
@@ -146,11 +147,13 @@ interface MediaRuntimeContextValue {
   store: ImmerStoreApi<AnyMediaStore>
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MediaShape = Record<string, any>
 
 type Simplify<T> = { [Key in keyof T]: T[Key] } & {}
 
 type SliceFromFeature<TFeature> =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TFeature extends MediaFeature<infer TSlice, any> ? TSlice : never
 
 type UnionToIntersection<TUnion> = (
@@ -249,7 +252,9 @@ const MediaRuntimeContext =
  * ```
  */
 export function createMediaKit<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const TFeatures extends readonly MediaFeature<any, any>[] =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     readonly MediaFeature<any, any>[],
 >({ features }: { features: TFeatures }) {
   type RuntimeStore = MediaStoreFromFeatures<TFeatures>
@@ -284,22 +289,18 @@ export function createMediaKit<
     children,
     debug,
   }: React.PropsWithChildren<MediaProviderProps>) {
-    const runtimeRef = React.useRef<null | {
-      events: MediaEvents<RuntimeEvents>
-      store: ImmerStoreApi<RuntimeStore>
-    }>(null)
-    const featureKeysRef = React.useRef(
-      new Set<string>(features.map((feature) => feature.key))
-    )
+    const [runtime] = React.useState(() => {
+      const created = createMediaStore()
 
-    if (!runtimeRef.current) {
-      runtimeRef.current = createMediaStore()
       if (typeof debug === "boolean") {
-        setMediaDebug(runtimeRef.current.store, debug)
+        setMediaDebug(created.store, debug)
       }
-    }
 
-    const runtime = runtimeRef.current
+      return created
+    })
+    const [featureKeys] = React.useState(
+      () => new Set<string>(features.map((feature) => feature.key))
+    )
 
     React.useLayoutEffect(() => {
       if (typeof debug !== "boolean") return
@@ -307,14 +308,17 @@ export function createMediaKit<
       setMediaDebug(runtime.store, debug)
     }, [debug, runtime.store])
 
+    const contextValue = React.useMemo(
+      () => ({
+        events: runtime.events as unknown as MediaEvents<AnyEvents>,
+        featureKeys,
+        store: runtime.store as ImmerStoreApi<AnyMediaStore>,
+      }),
+      [featureKeys, runtime]
+    )
+
     return (
-      <MediaRuntimeContext.Provider
-        value={{
-          events: runtime.events as unknown as MediaEvents<AnyEvents>,
-          featureKeys: featureKeysRef.current,
-          store: runtime.store as ImmerStoreApi<AnyMediaStore>,
-        }}
-      >
+      <MediaRuntimeContext.Provider value={contextValue}>
         {children}
         {features.map((feature) => {
           if (!feature.Setup) {

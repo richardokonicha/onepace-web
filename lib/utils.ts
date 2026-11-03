@@ -45,17 +45,17 @@ export function off<R extends HTMLElement>(
 /**
  * Implementation
  */
-export function off(
+export function off<R extends HTMLElement>(
   element: EventTarget,
   events: string | string[],
-  callback: (event: any) => void
+  callback: (event: React.SyntheticEvent<R>) => void
 ): EventTarget {
   if (Array.isArray(events)) {
     events.forEach((event) => {
-      element.removeEventListener(event, callback as EventListener)
+      element.removeEventListener(event, callback as unknown as EventListener)
     })
   } else {
-    element.removeEventListener(events, callback as EventListener)
+    element.removeEventListener(events, callback as unknown as EventListener)
   }
 
   return element
@@ -72,17 +72,17 @@ export function on<R extends HTMLElement>(
 /**
  * Implementation
  */
-export function on(
+export function on<R extends HTMLElement>(
   element: EventTarget,
   events: string | string[],
-  callback: (event: any) => void
+  callback: (event: React.SyntheticEvent<R>) => void
 ): EventTarget {
   if (Array.isArray(events)) {
     events.forEach((event) => {
-      element.addEventListener(event, callback as EventListener)
+      element.addEventListener(event, callback as unknown as EventListener)
     })
   } else {
-    element.addEventListener(events, callback as EventListener)
+    element.addEventListener(events, callback as unknown as EventListener)
   }
 
   return element

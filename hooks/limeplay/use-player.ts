@@ -88,7 +88,7 @@ export function isLoadInterrupted(error: unknown): boolean {
 
 export function playerFeature(): MediaFeature<PlayerStore> {
   return {
-    createSlice: (_set, _get, _store) => ({
+    createSlice: (_set) => ({
       [PLAYER_FEATURE_KEY]: {
         containerRef: null,
         instance: null,
@@ -277,13 +277,19 @@ function PlayerSetup() {
         return
       }
 
+      const media = store.getState().media.mediaElement
+
+      if (!media) {
+        return
+      }
+
       let localPlayer: null | shaka.Player = null
 
       try {
         localPlayer = new shakaLib.Player() as shaka.Player
 
         // DEV: initializeMediaSource is false, otherwise player is in loaded status by default
-        await localPlayer.attach(mediaElement, false)
+        await localPlayer.attach(media, false)
 
         if (aborted) {
           void localPlayer.destroy().catch(noop)
@@ -293,7 +299,7 @@ function PlayerSetup() {
         setPlayer(localPlayer)
         playerInstance.current = localPlayer
 
-        mediaElement.player = playerInstance.current
+        media.player = playerInstance.current
         window.shaka = shakaLib as unknown as Window["shaka"]
 
         events.emit("playerready")
@@ -332,7 +338,7 @@ function PlayerSetup() {
         playerInstance.current = null
       }
     }
-  }, [debug, mediaElement, setPlayer, events])
+  }, [debug, mediaElement, setPlayer, events, store])
 
   React.useEffect(() => {
     if (!player) return noop

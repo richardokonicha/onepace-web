@@ -36,19 +36,15 @@ export interface UseFullscreenReturn {
 export function useFullscreen(): UseFullscreenReturn {
   const container = usePlayerStore((state) => state.containerRef)
   const [active, setActive] = React.useState(false)
-  const [supported, setSupported] = React.useState(false)
 
-  React.useEffect(() => {
-    const element = document.documentElement as FullscreenCapableElement
-
-    // The capability is probed after mount so the first client render matches
-    // the server markup. Probing during render makes the control appear out
-    // of nowhere and breaks hydration.
-    setSupported(
-      typeof element.requestFullscreen === "function" ||
-        typeof element.webkitRequestFullscreen === "function"
-    )
-  }, [])
+  // The capability is probed on the client only, so the first client render
+  // matches the server markup. Probing during render makes the control appear
+  // out of nowhere and breaks hydration.
+  const supported = React.useSyncExternalStore(
+    subscribeToFullscreenSupport,
+    getFullscreenSupportSnapshot,
+    getServerFullscreenSupportSnapshot
+  )
 
   React.useEffect(() => {
     const onFullscreenChange = () => {
@@ -118,3 +114,22 @@ export function useFullscreen(): UseFullscreenReturn {
 
   return { active, enter, exit, supported, toggle }
 }
+
+function getFullscreenSupportSnapshot(): boolean {
+  const element = document.documentElement as FullscreenCapableElement
+
+  return (
+    typeof element.requestFullscreen === "function" ||
+    typeof element.webkitRequestFullscreen === "function"
+  )
+}
+
+function getServerFullscreenSupportSnapshot(): boolean {
+  return false
+}
+
+function subscribeToFullscreenSupport(): () => void {
+  return noop
+}
+
+function noop() {}

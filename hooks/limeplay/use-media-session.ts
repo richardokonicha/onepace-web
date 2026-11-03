@@ -92,7 +92,6 @@ type RetainedMediaPositionState = {
 
 const DEFAULT_MEDIA_SESSION_SEEK_OFFSET_SECONDS = 10
 const FROZEN_MEDIA_SESSION_PLAYBACK_RATE = 0.000001
-const MEDIA_SESSION_OWNER_FALLBACK = Symbol("limeplay-media-session-owner")
 
 let mediaSessionOwner: null | symbol = null
 const mediaSessionOwnerListeners = new Set<() => void>()
@@ -300,7 +299,10 @@ export function useMediaSessionActionHandlers(
   options: UseMediaSessionActionHandlersOptions
 ): MediaSessionActionHandlers {
   const optionsRef = React.useRef(options)
-  optionsRef.current = options
+
+  React.useEffect(() => {
+    optionsRef.current = options
+  })
 
   const canEnterPictureInPicture = Boolean(
     options.canEnterPictureInPicture && options.onEnterPictureInPicture
@@ -415,33 +417,29 @@ export function useMediaSessionSync({
   positionKey = null,
 }: UseMediaSessionSyncOptions): UseMediaSessionReturn {
   const mediaSession = useMediaSession()
-  const owner = React.useRef<symbol>(MEDIA_SESSION_OWNER_FALLBACK)
+  const [owner] = React.useState(() => Symbol("limeplay-media-session-owner"))
   const retainedPosition = React.useRef<null | RetainedMediaPositionState>(null)
   const currentOwner = React.useSyncExternalStore(
     subscribeMediaSessionOwner,
     getMediaSessionOwner,
     getServerMediaSessionOwner
   )
-  const ownsMediaSession = active && currentOwner === owner.current
-
-  if (owner.current === MEDIA_SESSION_OWNER_FALLBACK) {
-    owner.current = Symbol("limeplay-media-session-owner")
-  }
+  const ownsMediaSession = active && currentOwner === owner
 
   React.useEffect(() => {
     if (!active) {
-      if (getMediaSessionOwner() === owner.current) {
+      if (getMediaSessionOwner() === owner) {
         mediaSession.clearMetadata()
         mediaSession.clearPositionState()
         mediaSession.setPlaybackState("none")
         retainedPosition.current = null
-        releaseMediaSessionOwner(owner.current)
+        releaseMediaSessionOwner(owner)
       }
       return
     }
 
-    claimMediaSessionOwner(owner.current, claim)
-  }, [active, claim, currentOwner, mediaSession])
+    claimMediaSessionOwner(owner, claim)
+  }, [active, claim, currentOwner, mediaSession, owner])
 
   React.useEffect(() => {
     if (!ownsMediaSession) return
@@ -451,11 +449,11 @@ export function useMediaSessionSync({
     )
 
     return () => {
-      if (getMediaSessionOwner() !== owner.current) return
+      if (getMediaSessionOwner() !== owner) return
 
       cleanupHandlers.forEach((cleanup) => cleanup())
     }
-  }, [actions, mediaSession, ownsMediaSession])
+  }, [actions, mediaSession, ownsMediaSession, owner])
 
   // Publish metadata after the current action set so platform UIs choose the
   // correct track-navigation or seek-control layout for this source. Republish
@@ -504,15 +502,15 @@ export function useMediaSessionSync({
 
   React.useEffect(() => {
     return () => {
-      if (getMediaSessionOwner() === owner.current) {
+      if (getMediaSessionOwner() === owner) {
         mediaSession.clearMetadata()
         mediaSession.clearPositionState()
         mediaSession.setPlaybackState("none")
         retainedPosition.current = null
-        releaseMediaSessionOwner(owner.current)
+        releaseMediaSessionOwner(owner)
       }
     }
-  }, [mediaSession])
+  }, [mediaSession, owner])
 
   return mediaSession
 }

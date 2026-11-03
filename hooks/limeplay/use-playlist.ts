@@ -813,8 +813,12 @@ function PlaylistSetup() {
   React.useEffect(() => {
     if (!mediaElement) return
 
-    mediaElement.loop = repeatMode === "one"
-  }, [mediaElement, repeatMode])
+    const media = api.getState().media.mediaElement
+
+    if (!media) return
+
+    media.loop = repeatMode === "one"
+  }, [api, mediaElement, repeatMode])
 
   React.useEffect(() => {
     const playlist = api.getState().playlist as PlaylistStore["playlist"]
