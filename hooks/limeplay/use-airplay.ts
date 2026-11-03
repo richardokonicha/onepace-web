@@ -56,6 +56,58 @@ function isAirplayCapable(
   return typeof video?.webkitShowPlaybackTargetPicker === "function"
 }
 
+/**
+ * The availability probe that is armed on the element for the next click.
+ *
+ * Safari only reports receivers through an event, so the probe is armed
+ * again on every click. Only one probe per element stays armed, otherwise
+ * repeated clicks would pile up listeners that never fire.
+ */
+const armedAvailabilityProbe = new WeakMap<
+  WebKitPlaybackTargetElement,
+  (event: Event) => void
+>()
+
+function armAvailabilityProbe(
+  video: WebKitPlaybackTargetElement,
+  onAvailabilityChanged: () => void
+): void {
+  const armed = armedAvailabilityProbe.get(video)
+
+  if (armed) {
+    video.removeEventListener("webkitplaybacktargetavailabilitychanged", armed)
+  }
+
+  const handle = (event: Event) => {
+    armedAvailabilityProbe.delete(video)
+    applyAvailability(video, event)
+    onAvailabilityChanged()
+  }
+
+  armedAvailabilityProbe.set(video, handle)
+
+  video.addEventListener(
+    "webkitplaybacktargetavailabilitychanged",
+    handle,
+    { once: true }
+  )
+}
+
+/**
+ * Records the receiver availability Safari reports through an event.
+ */
+function applyAvailability(
+  video: WebKitPlaybackTargetElement,
+  event: Event
+): void {
+  const reported = (event as Event & { availability?: string }).availability
+
+  reportedAvailability.set(
+    video,
+    reported === "available" ? "available" : "unavailable"
+  )
+}
+
 function subscribeToAirplay(
   video: null | WebKitPlaybackTargetElement,
   onStoreChange: () => void
@@ -63,12 +115,7 @@ function subscribeToAirplay(
   if (!video) return () => {}
 
   const handleAvailabilityChanged = (event: Event) => {
-    const reported = (event as Event & { availability?: string }).availability
-
-    reportedAvailability.set(
-      video,
-      reported === "available" ? "available" : "unavailable"
-    )
+    applyAvailability(video, event)
     onStoreChange()
   }
 
@@ -160,8 +207,19 @@ export function useAirplay() {
 
   const video = mediaElement as null | WebKitPlaybackTargetElement
 
+  const notifyRef = React.useRef<null | (() => void)>(null)
+
   const subscribe = React.useCallback(
-    (onStoreChange: () => void) => subscribeToAirplay(video, onStoreChange),
+    (onStoreChange: () => void) => {
+      notifyRef.current = onStoreChange
+
+      const unsubscribe = subscribeToAirplay(video, onStoreChange)
+
+      return () => {
+        unsubscribe()
+        if (notifyRef.current === onStoreChange) notifyRef.current = null
+      }
+    },
     [video]
   )
   const getAvailability = React.useCallback(
@@ -259,10 +317,23 @@ export function useAirplay() {
   }, [mediaElement, resolvedSource, supported, publicOrigin])
 
   const showPicker = React.useCallback(() => {
-    if (!isAirplayCapable(video)) return
+    // The media store can lag behind the element that is actually on screen,
+    // so the element is resolved again on every click. That way the picker
+    // always opens for the element that is playing right now.
+    const target =
+      video ??
+      document.querySelector<WebKitPlaybackTargetElement>("video")
+
+    if (!isAirplayCapable(target)) return
+
+    // Safari reports the reachable receivers through an event only, and it
+    // fires that event for the element the picker belongs to. Re-arming the
+    // probe here makes every click pick up the receiver list as it is at
+    // that moment instead of relying on a cached reading.
+    armAvailabilityProbe(target, () => notifyRef.current?.())
 
     try {
-      video.webkitShowPlaybackTargetPicker?.()
+      target.webkitShowPlaybackTargetPicker?.()
     } catch (error) {
       console.warn(
         "[useAirplay] Failed to open the playback target picker",
