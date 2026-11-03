@@ -1,7 +1,7 @@
 "use client"
 
 import { Slider as SliderPrimitive } from "@base-ui/react/slider"
-import React, { useImperativeHandle, useRef, useState } from "react"
+import React, { useImperativeHandle, useRef } from "react"
 
 import { cn } from "@/lib/utils"
 import {
@@ -10,8 +10,6 @@ import {
 } from "@/hooks/limeplay/use-playback"
 import { useTrackEvents } from "@/hooks/limeplay/use-track-events"
 import { useVolumeStore } from "@/hooks/limeplay/use-volume"
-
-const VOLUME_RESET_BASE = 0.05
 
 export const Root = React.forwardRef<
   HTMLDivElement,
@@ -25,7 +23,6 @@ export const Root = React.forwardRef<
   const hasAudio = useVolumeStore((state) => state.hasAudio)
   const muted = useVolumeStore((state) => state.muted)
   const readyState = usePlaybackStore((state) => state.readyState)
-  const [currentValue, setCurrentValue] = useState(volume)
 
   const disabled =
     props.disabled || readyState < MediaReadyState.HAVE_METADATA || !hasAudio
@@ -49,26 +46,20 @@ export const Root = React.forwardRef<
   const trackEvents = useTrackEvents({
     onPointerDown: (progress, event) => {
       if (disabled) return
-      const newVolume = getVolumeFromEvent(event)
-      setCurrentValue(newVolume)
-      setVolume(newVolume)
+      setVolume(getVolumeFromEvent(event))
     },
     onPointerMove: (progress, isPointerDown, event) => {
       if (disabled) return
       if (isPointerDown) {
-        const newVolume = getVolumeFromEvent(event)
-        setCurrentValue(newVolume)
-        setVolume(newVolume)
+        setVolume(getVolumeFromEvent(event))
       }
     },
     orientation,
   })
 
-  const currentVolumeValue = muted
-    ? 0
-    : currentValue === 0
-      ? VOLUME_RESET_BASE
-      : volume
+  // The level in the store is the one the media element reports, so the
+  // slider also follows a volume that was changed from somewhere else.
+  const currentVolumeValue = muted ? 0 : volume
 
   return (
     <SliderPrimitive.Root
@@ -157,7 +148,10 @@ export const Thumb = React.forwardRef<HTMLDivElement, ThumbProps>(
   (props, ref) => {
     const { className, showVolumeText = true, ...etc } = props
     const volume = useVolumeStore((state) => state.level)
-    const displayValue = Number((volume * 100).toFixed(2))
+    const muted = useVolumeStore((state) => state.muted)
+    // The thumb has to report the same value the root renders, so a muted
+    // slider reads as zero instead of the level it will restore.
+    const displayValue = Number(((muted ? 0 : volume) * 100).toFixed(2))
 
     return (
       <SliderPrimitive.Thumb

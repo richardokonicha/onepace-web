@@ -37,6 +37,10 @@ export function usePlayerShortcuts(): void {
   const { toggle } = useFullscreen()
 
   React.useEffect(() => {
+    // Without a mounted player there is nothing to control, so the
+    // shortcuts must not take the keyboard away from the rest of the page.
+    if (!container) return
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
       if (event.metaKey || event.ctrlKey || event.altKey) return
@@ -46,7 +50,7 @@ export function usePlayerShortcuts(): void {
       const playerHasFocus =
         activeElement === null || activeElement === document.body
           ? true
-          : Boolean(container?.contains(activeElement))
+          : container.contains(activeElement)
 
       if (!playerHasFocus) return
 

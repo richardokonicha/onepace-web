@@ -26,13 +26,20 @@ export interface UseTrackEventsReturn<E extends HTMLElement> {
   onPointerMove: (e: React.PointerEvent<E>) => void
   onPointerOut: (e: React.PointerEvent<E>) => void
   onPointerUp: (e: React.PointerEvent<E>) => void
+  onPointerCancel: (e: React.PointerEvent<E>) => void
 }
 
 /** Events for a track/slider bar */
 export function useTrackEvents<E extends HTMLElement>(
   props: UseTrackEventsProps<E>
 ): UseTrackEventsReturn<E> {
-  const { orientation = "horizontal" } = props
+  const {
+    onPointerDown: handlePointerDown,
+    onPointerMove: handlePointerMove,
+    onPointerOut: handlePointerOut,
+    onPointerUp: handlePointerUp,
+    orientation = "horizontal",
+  } = props
 
   const getProgress = React.useCallback(
     (e: React.PointerEvent<E>) => {
@@ -60,12 +67,18 @@ export function useTrackEvents<E extends HTMLElement>(
       e.stopPropagation()
       e.preventDefault()
 
-      e.currentTarget.setPointerCapture(e.pointerId)
+      // The capture can fail when the pointer is already gone, which must
+      // not break the drag handling.
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        // The pointer is not active anymore, so there is nothing to capture.
+      }
       const value = getProgress(e)
       const progress = clamp(value, 0, 1)
-      props.onPointerDown(progress, e)
+      handlePointerDown(progress, e)
     },
-    [props.onPointerDown, getProgress]
+    [handlePointerDown, getProgress]
   )
 
   const onPointerMove = React.useCallback(
@@ -75,34 +88,67 @@ export function useTrackEvents<E extends HTMLElement>(
 
       const value = getProgress(e)
       const progress = clamp(value, 0, 1)
-      props.onPointerMove(
+      handlePointerMove(
         progress,
         e.currentTarget.hasPointerCapture(e.pointerId),
         e
       )
     },
-    [props.onPointerMove, getProgress]
+    [handlePointerMove, getProgress]
   )
+
+  const releaseCapture = React.useCallback((e: React.PointerEvent<E>) => {
+    // The capture is only taken for the primary button, so it can be absent
+    // when the pointer is released. Releasing it anyway throws.
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
+
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      // The pointer was already released, so the capture is gone.
+    }
+  }, [])
 
   const onPointerUp = React.useCallback(
     (e: React.PointerEvent<E>) => {
       e.stopPropagation()
       e.preventDefault()
 
-      e.currentTarget.releasePointerCapture(e.pointerId)
-      props.onPointerUp?.(e)
+      releaseCapture(e)
+      handlePointerUp?.(e)
     },
-    [props.onPointerUp]
+    [handlePointerUp, releaseCapture]
+  )
+
+  const onPointerCancel = React.useCallback(
+    (e: React.PointerEvent<E>) => {
+      e.stopPropagation()
+      e.preventDefault()
+
+      // A cancelled drag has to end like a finished one. Without this the
+      // pointer capture stays active and every later pointer move keeps
+      // seeking or changing the volume.
+      releaseCapture(e)
+      handlePointerUp?.(e)
+    },
+    [handlePointerUp, releaseCapture]
   )
 
   const onPointerOut = React.useCallback(
     (e: React.PointerEvent<E>) => {
       e.stopPropagation()
       e.preventDefault()
-      props.onPointerOut?.(e)
+
+      handlePointerOut?.(e)
     },
-    [props.onPointerOut]
+    [handlePointerOut]
   )
 
-  return { onPointerDown, onPointerMove, onPointerOut, onPointerUp }
+  return {
+    onPointerDown,
+    onPointerMove,
+    onPointerOut,
+    onPointerUp,
+    onPointerCancel,
+  }
 }

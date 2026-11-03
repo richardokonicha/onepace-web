@@ -25,6 +25,13 @@ export interface VolumeEvents {
 export interface VolumeStore extends MediaEventSlice<VolumeEvents> {
   [VOLUME_FEATURE_KEY]: {
     hasAudio: boolean
+    /**
+     * The last level that was not zero.
+     *
+     * Unmuting restores this level instead of a fixed fallback, so a mute
+     * never throws the volume the user had set away.
+     */
+    lastLevel: number
     level: number
     muted: boolean
     setMuted: (muted: boolean) => void
@@ -55,6 +62,7 @@ export function volumeFeature(): MediaFeature<VolumeStore> {
     createSlice: (set, get) => ({
       [VOLUME_FEATURE_KEY]: {
         hasAudio: true,
+        lastLevel: 1,
         level: 1,
         muted: false,
         setMuted: (muted) => {
@@ -62,8 +70,12 @@ export function volumeFeature(): MediaFeature<VolumeStore> {
           if (!media) return
 
           media.muted = muted
-          if (!muted) {
-            media.volume = media.volume === 0 ? BASE_RESET_VOLUME : media.volume
+
+          if (!muted && media.volume === 0) {
+            // The level the user had before is restored, so unmuting does
+            // not jump the volume down to the fallback.
+            const lastLevel = get().volume.lastLevel
+            media.volume = lastLevel > 0 ? lastLevel : BASE_RESET_VOLUME
           }
 
           set(({ media: mediaState }) => {
@@ -93,8 +105,20 @@ export function volumeFeature(): MediaFeature<VolumeStore> {
           media.volume = clampedVolume
           media.muted = muted
 
-          set(({ media: mediaState }) => {
+          set(({ media: mediaState, volume: volumeState }) => {
             mediaState.idle = false
+
+            // The store is updated right away so the slider follows the
+            // pointer without waiting for the native volume change event.
+            volumeState.level = clampedVolume
+            volumeState.muted = muted
+
+            // A level of zero is kept out of the remembered level, so the
+            // slider can be dragged to zero without losing the volume the
+            // user had before.
+            if (clampedVolume > 0) {
+              volumeState.lastLevel = clampedVolume
+            }
           })
         },
         toggleMute: () => {
@@ -102,8 +126,10 @@ export function volumeFeature(): MediaFeature<VolumeStore> {
           if (!media) return
 
           media.muted = !media.muted
-          if (!media.muted) {
-            media.volume = media.volume === 0 ? BASE_RESET_VOLUME : media.volume
+
+          if (!media.muted && media.volume === 0) {
+            const lastLevel = get().volume.lastLevel
+            media.volume = lastLevel > 0 ? lastLevel : BASE_RESET_VOLUME
           }
 
           set(({ media: mediaState }) => {
@@ -180,6 +206,12 @@ function VolumeSetup() {
       store.setState(({ volume }) => {
         volume.level = level
         volume.muted = muted
+
+        // A level that is not zero is the one to come back to when the
+        // playback is unmuted.
+        if (level > 0) {
+          volume.lastLevel = level
+        }
       })
 
       events.emit("volumechange", { muted, volume: level })
