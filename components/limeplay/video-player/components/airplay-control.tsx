@@ -1,9 +1,11 @@
 "use client"
 
 import { Airplay } from "lucide-react"
+import * as React from "react"
 
 import { Button } from "@/components/limeplay/video-player/components/button"
 import { useAirplay } from "@/hooks/limeplay/use-airplay"
+import { useMediaStore } from "@/hooks/limeplay/use-media"
 
 /**
  * Opens the native AirPlay route picker.
@@ -14,8 +16,17 @@ import { useAirplay } from "@/hooks/limeplay/use-airplay"
  */
 export function AirPlayControl() {
   const { active, availability, showPicker, supported } = useAirplay()
+  const mediaElement = useMediaStore((state) => state.mediaElement)
 
-  if (!supported) return null
+  // Some browsers report the WebKit playback target API differently, or
+  // the element may not be attached to the store yet when first rendered.
+  // Fall back to a direct check on the element or the document.
+  const canShow =
+    supported ||
+    typeof (mediaElement as HTMLVideoElement & { webkitShowPlaybackTargetPicker?: () => void })
+      ?.webkitShowPlaybackTargetPicker === "function"
+
+  if (!canShow) return null
 
   const label = active
     ? "AirPlay is connected"

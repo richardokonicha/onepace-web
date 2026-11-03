@@ -173,7 +173,7 @@ export function useAirplay() {
   const availability = React.useSyncExternalStore(
     subscribe,
     getAvailability,
-    () => "unsupported"
+    () => (isAirplayCapable(video) ? "unavailable" : "unsupported")
   )
   const active = React.useSyncExternalStore(
     subscribe,
