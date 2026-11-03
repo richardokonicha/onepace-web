@@ -49,7 +49,12 @@ function loadProgress(epId: number): number | null {
 }
 
 function saveProgressNow(epId: number, currentTime: number, duration: number) {
-  if (currentTime < MIN_PROGRESS_SECONDS) return
+  // A deliberate restart back to the start leaves the old position behind,
+  // so the stale entry is cleared instead of being left to restore again.
+  if (currentTime < MIN_PROGRESS_SECONDS) {
+    removeProgress(epId)
+    return
+  }
   if (duration <= 0) return
   if (currentTime >= duration - COMPLETED_MARGIN_SECONDS) {
     removeProgress(epId)
@@ -128,20 +133,42 @@ export function useWatchProgress() {
     mediaElement.addEventListener("durationchange", onMetadata)
     mediaElement.addEventListener("canplay", onMetadata)
 
-    const restoreTimer = window.setInterval(() => {
-      attempts += 1
-      tryRestore()
-      if (restored || attempts >= MAX_RESTORE_ATTEMPTS) {
+    /**
+     * Arms (or re-arms) the retry window.
+     *
+     * The window has to survive a same-episode re-load: the effect that owns
+     * it does not re-run when only the asset changes, so the interval created
+     * at the first mount is the only one that exists. A new load rewinds the
+     * playhead again, so the window is restarted on every load rather than
+     * being left to die after the first five seconds.
+     */
+    let restoreTimer: number | null = null
+    const startRestoreWindow = () => {
+      if (restoreTimer) {
         window.clearInterval(restoreTimer)
       }
-    }, RESTORE_RETRY_MS)
+      attempts = 0
+      restoreTimer = window.setInterval(() => {
+        attempts += 1
+        tryRestore()
+        if (restored || attempts >= MAX_RESTORE_ATTEMPTS) {
+          if (restoreTimer) {
+            window.clearInterval(restoreTimer)
+            restoreTimer = null
+          }
+        }
+      }, RESTORE_RETRY_MS)
+    }
 
     // A new load rewinds the playhead again, so the restore starts over with
-    // the new asset.
+    // the new asset. The retry window is restarted as well, because the
+    // effect does not re-run on a same-episode re-load and the previous
+    // interval would otherwise be dead by the time the metadata arrives.
     const offAssetLoadStart = events.on("assetloadstart", () => {
       assetLoaded = false
       restored = false
       seeks = 0
+      startRestoreWindow()
     })
 
     const offAssetLoaded = events.on("assetloaded", () => {
@@ -149,6 +176,7 @@ export function useWatchProgress() {
       tryRestore()
     })
 
+    startRestoreWindow()
     tryRestore()
 
     const onTimeUpdate = () => {
@@ -160,7 +188,10 @@ export function useWatchProgress() {
 
     mediaElement.addEventListener("timeupdate", onTimeUpdate)
     return () => {
-      window.clearInterval(restoreTimer)
+      if (restoreTimer) {
+        window.clearInterval(restoreTimer)
+        restoreTimer = null
+      }
       offAssetLoadStart()
       offAssetLoaded()
       mediaElement.removeEventListener("loadedmetadata", onMetadata)

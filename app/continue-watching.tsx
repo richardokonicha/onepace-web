@@ -1,6 +1,6 @@
 "use client";
 
-import { getProgressPercent, isResumable } from "@/lib/watch-progress";
+import { isResumable } from "@/lib/watch-progress";
 import { EpisodeCard } from "./episode-card";
 import { useWatchProgressMap } from "./watch-progress-provider";
 
@@ -49,12 +49,4 @@ export function ContinueWatching({ episodes }: ContinueWatchingProps) {
       </div>
     </section>
   );
-}
-
-/**
- * How much of an episode was watched, as a percentage.
- */
-export function useEpisodeProgress(episodeId: number) {
-  const progress = useWatchProgressMap();
-  return getProgressPercent(progress[episodeId]);
 }

@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export default async function Home() {
   const { arcs } = await getLibrary(98);
   const episodes = arcs.flatMap((arc) =>
-    arc.episodes.map((ep) => ({ id: ep.id, label: ep.label, name: ep.name }))
+    arc.episodes.map((ep) => ({ id: ep.id, label: arc.label, name: ep.name }))
   );
 
   return (

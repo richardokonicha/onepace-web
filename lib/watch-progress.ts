@@ -31,7 +31,15 @@ export function readProgressMap(): Record<number, WatchProgress> {
     const result: Record<number, WatchProgress> = {};
     for (const [key, value] of Object.entries(parsed)) {
       const id = Number(key);
-      if (Number.isFinite(id) && value && typeof value.currentTime === "number") {
+      if (
+        Number.isFinite(id) &&
+        value &&
+        typeof value.currentTime === "number" &&
+        Number.isFinite(value.currentTime) &&
+        typeof value.duration === "number" &&
+        Number.isFinite(value.duration) &&
+        value.duration > 0
+      ) {
         result[id] = { ...value, episodeId: id };
       }
     }
@@ -71,6 +79,10 @@ export function getProgressPercent(
  */
 export function writeProgress(progress: WatchProgress) {
   if (typeof window === "undefined") return;
+
+  if (!(progress.duration > 0) || !Number.isFinite(progress.currentTime)) {
+    return;
+  }
 
   try {
     const raw = window.localStorage.getItem(WATCH_PROGRESS_STORAGE_KEY);
