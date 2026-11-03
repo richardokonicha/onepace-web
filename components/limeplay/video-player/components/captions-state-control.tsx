@@ -8,6 +8,13 @@ import { CaptionsControl } from "@/components/limeplay/captions"
 
 export function CaptionsStateControl() {
   const textTrackVisible = useCaptionsStore((state) => state.visible)
+  const textTracks = useCaptionsStore((state) => state.tracks)
+
+  // A stream without text tracks has nothing to toggle, so the button is
+  // removed instead of sitting there greyed out.
+  if (textTracks && textTracks.length === 0) {
+    return null
+  }
 
   return (
     <CaptionsControl asChild>

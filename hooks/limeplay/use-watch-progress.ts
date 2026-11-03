@@ -7,23 +7,23 @@ import type { AssetEvents } from "@/hooks/limeplay/use-asset"
 import { usePlaylistStore } from "@/hooks/limeplay/use-playlist"
 import { useMediaStore } from "@/hooks/limeplay/use-media"
 import { useTimelineStore } from "@/hooks/limeplay/use-timeline"
-
-interface WatchProgress {
-  episodeId: number
-  currentTime: number
-  duration: number
-  updatedAt: number
-}
-
-const STORAGE_KEY = "onepace-watch-progress"
-const SAVE_INTERVAL_MS = 5000
-const MIN_PROGRESS_TO_SAVE = 10
+import {
+  COMPLETED_MARGIN_SECONDS,
+  MIN_PROGRESS_SECONDS,
+  readProgressMap,
+  removeProgress,
+  writeProgress,
+  type WatchProgress,
+} from "@/lib/watch-progress"
 
 /** How often the restore is retried while the metadata is still missing. */
 const RESTORE_RETRY_MS = 100
 
 /** How long the restore is retried before it is given up on. */
 const MAX_RESTORE_ATTEMPTS = 50
+
+/** How often the position of the episode is written to the storage. */
+const SAVE_INTERVAL_MS = 5000
 
 /**
  * How many seeks a single restore may issue.
@@ -36,61 +36,26 @@ const MAX_RESTORE_SEEKS = 3
 /** How close the playhead has to be to the saved position to count as restored. */
 const RESTORE_TOLERANCE_SECONDS = 1
 
-function getProgress(episodeId: number): WatchProgress | null {
-  if (typeof window === "undefined") return null
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const all = JSON.parse(raw) as Record<number, WatchProgress>
-    return all[episodeId] ?? null
-  } catch {
-    return null
-  }
-}
-
-function saveProgress(episodeId: number, progress: WatchProgress) {
-  if (typeof window === "undefined") return
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    const all = raw ? (JSON.parse(raw) as Record<number, WatchProgress>) : {}
-    all[episodeId] = progress
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
-  } catch {
-  }
-}
-
-function clearProgress(episodeId: number) {
-  if (typeof window === "undefined") return
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return
-    const all = JSON.parse(raw) as Record<number, WatchProgress>
-    delete all[episodeId]
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
-  } catch {
-  }
-}
-
 function loadProgress(epId: number): number | null {
-  const progress = getProgress(epId)
+  const progress = readProgressMap()[epId] ?? null
   if (!progress) return null
   if (progress.duration <= 0) return null
-  if (progress.currentTime < MIN_PROGRESS_TO_SAVE) return null
-  if (progress.currentTime >= progress.duration - 60) {
-    clearProgress(epId)
+  if (progress.currentTime < MIN_PROGRESS_SECONDS) return null
+  if (progress.currentTime >= progress.duration - COMPLETED_MARGIN_SECONDS) {
+    removeProgress(epId)
     return null
   }
   return progress.currentTime
 }
 
 function saveProgressNow(epId: number, currentTime: number, duration: number) {
-  if (currentTime < MIN_PROGRESS_TO_SAVE) return
+  if (currentTime < MIN_PROGRESS_SECONDS) return
   if (duration <= 0) return
-  if (currentTime >= duration - 60) {
-    clearProgress(epId)
+  if (currentTime >= duration - COMPLETED_MARGIN_SECONDS) {
+    removeProgress(epId)
     return
   }
-  saveProgress(epId, {
+  writeProgress({
     episodeId: epId,
     currentTime,
     duration,
@@ -206,29 +171,13 @@ export function useWatchProgress() {
     }
   }, [episodeId, mediaElement, seek, events])
 
-  return { loadProgress, saveProgressNow, clearProgress }
+  return { loadProgress, saveProgressNow, clearProgress: removeProgress }
 }
 
 export function getWatchProgress(episodeId: number): WatchProgress | null {
-  if (typeof window === "undefined") return null
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const all = JSON.parse(raw) as Record<number, WatchProgress>
-    return all[episodeId] ?? null
-  } catch {
-    return null
-  }
+  return readProgressMap()[episodeId] ?? null
 }
 
 export function clearWatchProgress(episodeId: number) {
-  if (typeof window === "undefined") return
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return
-    const all = JSON.parse(raw) as Record<number, WatchProgress>
-    delete all[episodeId]
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
-  } catch {
-  }
+  removeProgress(episodeId)
 }

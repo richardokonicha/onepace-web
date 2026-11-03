@@ -1,7 +1,5 @@
 "use client"
 
-import React from "react"
-
 import * as Select from "@/components/ui/select"
 import * as PlaybackRate from "@/components/limeplay/playback-rate"
 
@@ -25,15 +23,12 @@ export function PlaybackRateControl() {
       </Button>
       <Select.SelectContent
         align="start"
-        className={`min-w-28 border border-border backdrop-blur-lg`}
+        className="min-w-28 border border-border backdrop-blur-lg"
+        position="popper"
         side="top"
         sideOffset={12}
-        {...({
-          alignItemWithTrigger: false,
-          position: "popper",
-        } as React.ComponentProps<typeof Select.SelectContent>)}
       >
-        <PlaybackRate.SelectGroup className={`tracking-wider`}>
+        <PlaybackRate.SelectGroup className="tracking-wider">
           <Select.SelectLabel className="whitespace-nowrap">
             Playback Rate
           </Select.SelectLabel>

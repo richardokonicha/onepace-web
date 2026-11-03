@@ -3,6 +3,7 @@ import { CaptionsStateControl } from "@/components/limeplay/video-player/compone
 import { CastControl } from "@/components/limeplay/video-player/components/cast-control"
 import { FullscreenControl } from "@/components/limeplay/video-player/components/fullscreen-control"
 import { PictureInPictureControl } from "@/components/limeplay/video-player/components/pip-control"
+import { PlaybackRateControl } from "@/components/limeplay/video-player/components/playback-rate-control"
 import { PlaybackStateControl } from "@/components/limeplay/video-player/components/playback-state-control"
 import { Playlist } from "@/components/limeplay/video-player/components/playlist"
 import { PlaylistNextControl } from "@/components/limeplay/video-player/components/playlist-navigation-controls"
@@ -65,6 +66,7 @@ export function BottomControls({ className }: BottomControlsProps) {
               @3xl/root:col-start-3 @3xl/root:row-start-1
             "
           >
+            <PlaybackRateControl />
             <CaptionsStateControl />
             <PictureInPictureControl />
             <CastControl />
