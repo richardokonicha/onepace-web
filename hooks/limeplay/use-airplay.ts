@@ -94,6 +94,103 @@ function armAvailabilityProbe(
 }
 
 /**
+ * Screen wake lock that keeps a phone from locking its display while a
+ * receiver plays the stream.
+ *
+ * Safari suspends a backgrounded page and pauses its media element. A
+ * paused element stops feeding the receiver, so the wireless route is torn
+ * down and the AirPlay session drops. Holding the screen awake prevents
+ * the suspension in the first place.
+ */
+let wakeLock: null | WakeLockSentinel = null
+let wakeLockRequest: null | Promise<void> = null
+
+async function acquireWakeLock(): Promise<void> {
+  if (typeof navigator === "undefined") return
+
+  const api = navigator.wakeLock as undefined | WakeLock
+
+  if (typeof api?.request !== "function") return
+  if (wakeLock && !wakeLock.released) return
+
+  wakeLockRequest ??= api
+    .request("screen")
+    .then((sentinel) => {
+      wakeLock = sentinel
+
+      sentinel.addEventListener("release", () => {
+        if (wakeLock === sentinel) wakeLock = null
+      })
+    })
+    .catch(() => {
+      // The browser refuses the lock while the document is hidden or is not
+      // allowed to hold one. The route is still kept alive by the playback
+      // resume in that case.
+    })
+    .finally(() => {
+      wakeLockRequest = null
+    })
+
+  await wakeLockRequest
+}
+
+function releaseWakeLock(): void {
+  const sentinel = wakeLock
+  wakeLock = null
+
+  if (!sentinel) return
+
+  void sentinel.release().catch(() => {})
+}
+
+/**
+ * How long after the page was hidden a pause still counts as one the
+ * browser caused on its own.
+ *
+ * Safari pauses the media element right after the page is backgrounded. A
+ * pause that happens much later was asked for by the user, usually from the
+ * lock screen, and must not be undone.
+ */
+const BACKGROUND_PAUSE_WINDOW_MS = 3000
+
+/**
+ * Resumes a routed element that is paused.
+ *
+ * Safari tears the wireless route down again when the element stays
+ * paused, which leaves the receiver with an empty stream. Resuming the
+ * element keeps the route alive and lets the receiver receive media.
+ */
+function resumeRoutedPlayback(video: WebKitPlaybackTargetElement): void {
+  if (video.webkitCurrentPlaybackTargetIsWireless !== true) return
+  if (!video.paused) return
+
+  void video.play().catch(() => {})
+}
+
+/**
+ * Resumes a routed element that the browser paused while the page was
+ * backgrounded.
+ *
+ * Safari pauses the media element when the page is backgrounded or the
+ * screen locks. The element stops feeding the receiver at that point, the
+ * receiver runs out of media and the wireless route is dropped.
+ *
+ * Only a pause that follows the backgrounding within a short window is
+ * undone, so a pause the user asks for later stays untouched.
+ */
+function resumeBackgroundedPlayback(
+  video: WebKitPlaybackTargetElement,
+  hiddenAt: number
+): void {
+  if (video.webkitCurrentPlaybackTargetIsWireless !== true) return
+  if (!video.paused) return
+  if (typeof document !== "undefined" && !document.hidden) return
+  if (Date.now() - hiddenAt > BACKGROUND_PAUSE_WINDOW_MS) return
+
+  void video.play().catch(() => {})
+}
+
+/**
  * Records the receiver availability Safari reports through an event.
  */
 function applyAvailability(
@@ -120,14 +217,47 @@ function subscribeToAirplay(
   }
 
   const handleWirelessChanged = () => {
-    // Safari tears the wireless route down again when the element stays
-    // paused, which leaves the receiver with an empty stream. Resuming the
-    // element keeps the route alive and lets the receiver receive media.
-    if (video.webkitCurrentPlaybackTargetIsWireless === true && video.paused) {
-      void video.play().catch(() => {})
+    const routed = video.webkitCurrentPlaybackTargetIsWireless === true
+
+    if (routed) {
+      // Safari tears the wireless route down again when the element stays
+      // paused, which leaves the receiver with an empty stream. Resuming the
+      // element keeps the route alive and lets the receiver receive media.
+      resumeRoutedPlayback(video)
+
+      // A screen wake lock stops the phone from locking its display, which
+      // would suspend the page and take the route down with it.
+      void acquireWakeLock()
+    } else {
+      releaseWakeLock()
     }
 
     onStoreChange()
+  }
+
+  // Safari pauses the element shortly after the page is backgrounded. The
+  // moment the page was hidden tells a browser caused pause apart from one
+  // the user asked for.
+  let hiddenAt = 0
+
+  const handlePause = () => {
+    resumeBackgroundedPlayback(video, hiddenAt)
+  }
+
+  const handleVisibilityChanged = () => {
+    if (document.hidden) {
+      hiddenAt = Date.now()
+      resumeBackgroundedPlayback(video, hiddenAt)
+      return
+    }
+
+    hiddenAt = 0
+
+    // A wake lock is released whenever the page is hidden, so it has to be
+    // taken again as soon as the page comes back.
+    if (video.webkitCurrentPlaybackTargetIsWireless === true) {
+      void acquireWakeLock()
+    }
   }
 
   video.addEventListener(
@@ -138,6 +268,12 @@ function subscribeToAirplay(
     "webkitcurrentplaybacktargetiswirelesschanged",
     handleWirelessChanged
   )
+  video.addEventListener("pause", handlePause)
+  document.addEventListener("visibilitychange", handleVisibilityChanged)
+
+  if (video.webkitCurrentPlaybackTargetIsWireless === true) {
+    void acquireWakeLock()
+  }
 
   return () => {
     video.removeEventListener(
@@ -148,6 +284,9 @@ function subscribeToAirplay(
       "webkitcurrentplaybacktargetiswirelesschanged",
       handleWirelessChanged
     )
+    video.removeEventListener("pause", handlePause)
+    document.removeEventListener("visibilitychange", handleVisibilityChanged)
+    releaseWakeLock()
   }
 }
 
@@ -280,7 +419,11 @@ export function useAirplay() {
       // The MediaSource URL does not always live in the `src` attribute:
       // Shaka's `SrcEqualsPolyfill` moves it into a `<source>` child on
       // browsers without `src=` support for MediaSource.
-      if (!element.src && !element.querySelector("source")) return
+      const primary = element.querySelector<HTMLSourceElement>(
+        `source:not([${AIRPLAY_SOURCE_ATTRIBUTE}])`
+      )
+
+      if (!primary) return
 
       let source = element.querySelector<HTMLSourceElement>(
         `source[${AIRPLAY_SOURCE_ATTRIBUTE}]`
@@ -290,11 +433,19 @@ export function useAirplay() {
         source = document.createElement("source")
         source.setAttribute(AIRPLAY_SOURCE_ATTRIBUTE, "")
         source.type = AIRPLAY_SOURCE_TYPE
-        element.appendChild(source)
       }
 
       if (source.getAttribute("src") !== url) {
         source.setAttribute("src", url)
+      }
+
+      // The browser plays the first source it can handle, so the manifest
+      // has to stay behind the MediaSource source. Shaka replaces its own
+      // source on every load, which would otherwise move the manifest to
+      // the front and hand the local playback over to the browser's own
+      // HLS support.
+      if (primary.nextElementSibling !== source) {
+        element.insertBefore(source, primary.nextElementSibling)
       }
     }
 
