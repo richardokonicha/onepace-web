@@ -38,6 +38,7 @@ export function AirPlayControl() {
     <Button
       aria-label={label}
       aria-pressed={active}
+      data-label="lp-airplay-control"
       className={
         active
           ? "bg-white text-black hover:bg-white/90"
