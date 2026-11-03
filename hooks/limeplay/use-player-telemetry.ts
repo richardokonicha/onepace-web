@@ -2,9 +2,9 @@
 
 import * as React from "react"
 
+import { useBufferingStore } from "@/hooks/limeplay/use-buffering"
 import { usePlaybackStore } from "@/hooks/limeplay/use-playback"
 import { usePlayerStore } from "@/hooks/limeplay/use-player"
-import { useTimelineStore } from "@/hooks/limeplay/use-timeline"
 
 /**
  * Live playback telemetry pulled from Shaka and the Limeplay timeline store.
@@ -41,8 +41,7 @@ const EMPTY_TELEMETRY: PlayerTelemetry = {
 export function usePlayerTelemetry(intervalMs = 1000): PlayerTelemetry {
   const player = usePlayerStore((state) => state.instance)
   const status = usePlaybackStore((state) => state.status)
-  const buffered = useTimelineStore((state) => state.buffered)
-  const currentTime = useTimelineStore((state) => state.currentTime)
+  const bufferedAhead = useBufferingStore((state) => state.bufferedAhead)
 
   const [telemetry, setTelemetry] = React.useState<PlayerTelemetry>(
     EMPTY_TELEMETRY
@@ -52,10 +51,7 @@ export function usePlayerTelemetry(intervalMs = 1000): PlayerTelemetry {
   const previousTimeRef = React.useRef<null | number>(null)
 
   React.useEffect(() => {
-    if (!player) {
-      setTelemetry(EMPTY_TELEMETRY)
-      return
-    }
+    if (!player) return
 
     if (status !== "playing" && status !== "buffering") return
 
@@ -106,19 +102,11 @@ export function usePlayerTelemetry(intervalMs = 1000): PlayerTelemetry {
     }
   }, [intervalMs, player, status])
 
-  // Buffered seconds ahead of the playhead come from the Limeplay timeline
-  // store, which already tracks the live buffered ranges.
-  const bufferedAhead = React.useMemo(() => {
-    if (!buffered.length) return 0
+  // The buffered seconds ahead of the playhead are measured by the buffering
+  // feature, which reads them from the media element.
+  return React.useMemo(() => {
+    if (!player) return EMPTY_TELEMETRY
 
-    return buffered.reduce((total, range) => {
-      if (range.end <= currentTime) return total
-      return total + (range.end - Math.max(range.start, currentTime))
-    }, 0)
-  }, [buffered, currentTime])
-
-  return React.useMemo(
-    () => ({ ...telemetry, bufferedAhead }),
-    [bufferedAhead, telemetry]
-  )
+    return { ...telemetry, bufferedAhead }
+  }, [bufferedAhead, player, telemetry])
 }

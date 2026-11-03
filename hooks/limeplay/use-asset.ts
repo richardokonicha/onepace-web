@@ -27,6 +27,10 @@ import type {
 import { isLoadInterrupted } from "@/hooks/limeplay/use-player"
 import { usePlaylist } from "@/hooks/limeplay/use-playlist"
 import {
+  DEFAULT_PLAYER_CONFIG,
+  mergePlayerConfig,
+} from "@/hooks/limeplay/shaka-config"
+import {
   useMediaEvents,
   useMediaFeatureApi,
   useMediaFeatureStore,
@@ -702,11 +706,21 @@ export function assetFeature(): MediaFeature<
                 )
               }
 
+              // The preload manager starts with the defaults of the player,
+              // so the app configuration has to be part of it.
+              const preloadConfig = mergePlayerConfig(
+                mergePlayerConfig(
+                  player.getConfiguration(),
+                  DEFAULT_PLAYER_CONFIG
+                ),
+                asset.config
+              )
+
               const manager = await player.preload(
                 resolvedSource,
                 undefined,
                 undefined,
-                mergePlayerConfiguration(asset.config, normalizedSource.config)
+                mergePlayerConfig(preloadConfig, normalizedSource.config)
               )
               if (!isCurrentPreload()) {
                 void manager?.destroy()
@@ -1049,6 +1063,10 @@ function createDefaultLoad({
     const normalizedSource = normalizePlaybackSource(source)
     player.resetConfiguration()
 
+    // The app owns the buffering behaviour, an asset or a resolved source
+    // can still override it.
+    player.configure(DEFAULT_PLAYER_CONFIG)
+
     if (asset.config) {
       player.configure(asset.config)
     }
@@ -1125,19 +1143,6 @@ function hashString(value: string): string {
   }
 
   return Math.abs(hash).toString(36)
-}
-
-function mergePlayerConfiguration(
-  base?: shaka.extern.PlayerConfiguration,
-  override?: shaka.extern.PlayerConfiguration
-): shaka.extern.PlayerConfiguration | undefined {
-  if (!base) return override
-  if (!override) return base
-
-  return {
-    ...base,
-    ...override,
-  }
 }
 
 function normalizeAssets(

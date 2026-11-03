@@ -1,6 +1,7 @@
 "use client"
 
 import { assetFeature } from "@/hooks/limeplay/use-asset"
+import { bufferingFeature } from "@/hooks/limeplay/use-buffering"
 import { captionsFeature } from "@/hooks/limeplay/use-captions"
 import { mediaFeature } from "@/hooks/limeplay/use-media"
 import { pictureInPictureFeature } from "@/hooks/limeplay/use-picture-in-picture"
@@ -17,6 +18,7 @@ export const media = createMediaKit({
     mediaFeature(),
     playerFeature(),
     playbackFeature(),
+    bufferingFeature(),
     playlistFeature(),
     volumeFeature(),
     timelineFeature(),
