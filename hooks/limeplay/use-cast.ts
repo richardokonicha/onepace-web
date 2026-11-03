@@ -115,7 +115,6 @@ interface NavigatorPresentation {
 declare global {
   interface Window {
     cast?: { framework?: CastFramework }
-    __onGCastApiAvailable?: (available: boolean) => void
   }
 
   interface Navigator {
@@ -140,9 +139,13 @@ function castFrameworkReady(): boolean {
 /**
  * Loads the Chrome Cast sender SDK once per document.
  *
- * Resolves `true` once the framework is usable. The SDK notifies through the
- * `__onGCastApiAvailable` global, which has to be installed *before* the
- * script is injected because the SDK calls it exactly once.
+ * Resolves `true` once the framework is usable.
+ *
+ * The SDK owns the `__onGCastApiAvailable` global and replaces it with its
+ * own bookkeeping function while it boots. Touching that global from the
+ * outside makes the SDK call a detached callback, which throws an
+ * "Illegal invocation" inside the page, so the framework is detected by
+ * polling for `CastContext` instead.
  */
 function loadCastSenderSdk(): Promise<boolean> {
   if (typeof window === "undefined") return Promise.resolve(false)
@@ -164,14 +167,6 @@ function loadCastSenderSdk(): Promise<boolean> {
     }
 
     const timer = window.setTimeout(() => settle(false), CAST_SDK_TIMEOUT_MS)
-
-    const previous = window.__onGCastApiAvailable
-    window.__onGCastApiAvailable = (available: boolean) => {
-      previous?.(available)
-      // The notification can arrive before the framework is exposed, so the
-      // poll below decides when the SDK is actually usable.
-      if (available && castFrameworkReady()) settle(true)
-    }
 
     if (castFrameworkReady()) {
       settle(true)
