@@ -34,12 +34,31 @@ export interface PlayerConfigOverrides extends ConfigSection {
     shaka.extern.StreamingConfiguration,
     "bufferingGoal" | "rebufferingGoal"
   >
+  manifest: {
+    hls: Pick<
+      shaka.extern.HlsManifestConfiguration,
+      "ignoreManifestTimestampsInSegmentsMode"
+    >
+  }
 }
 
 export const DEFAULT_PLAYER_CONFIG: PlayerConfigOverrides = {
   streaming: {
     bufferingGoal: BUFFERING_GOAL_SECONDS,
     rebufferingGoal: REBUFFERING_GOAL_SECONDS,
+  },
+  manifest: {
+    hls: {
+      // The upstream playlists declare a flat duration for every segment
+      // (ten or twenty seconds) while the segments themselves are cut on
+      // keyframes and hold a different amount of media. Shaka normally
+      // re-anchors every segment on the declared timeline, so the shorter
+      // segments leave holes in the buffered range and the player jumps over
+      // them, which reads as a short skip every few seconds. The media of the
+      // streams is continuous, so the manifest timeline is ignored and the
+      // timestamps inside the segments are used as they are.
+      ignoreManifestTimestampsInSegmentsMode: true,
+    },
   },
 }
 

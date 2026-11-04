@@ -4,7 +4,7 @@ import { useCallback, useEffect } from "react";
 import Link from "next/link";
 
 import type { VideoPlayerAsset } from "@/components/limeplay/video-player/player";
-import { VideoPlayer } from "@/components/limeplay/video-player/player";
+import { TelevisionPlayer } from "@/components/tv";
 import type { PlaybackSource } from "@/hooks/limeplay/use-asset";
 import { usePlaylistStore } from "@/hooks/limeplay/use-playlist";
 
@@ -125,8 +125,8 @@ export function WatchClient({ assets, initialIndex }: WatchClientProps) {
         </div>
       </header>
 
-      <div className="mx-auto w-full max-w-7xl p-4">
-        <VideoPlayer
+      <div className="w-full">
+        <TelevisionPlayer
           source={assets}
           initialIndex={initialIndex}
           loading={{
@@ -135,10 +135,14 @@ export function WatchClient({ assets, initialIndex }: WatchClientProps) {
             maxRetries: 2,
           }}
           mediaProps={{ autoPlay: true }}
-          layout="aspect"
+          frame={{
+            align: "center",
+            className:
+              "[--tv-room-min-height:calc(100svh_-_5rem)] max-[700px]:[--tv-room-min-height:340px]",
+          }}
         >
           <EpisodeUrlSync />
-        </VideoPlayer>
+        </TelevisionPlayer>
       </div>
     </main>
   );

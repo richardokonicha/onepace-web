@@ -57,6 +57,15 @@ export interface VideoPlayerProps
    */
   mediaProps?: Omit<React.VideoHTMLAttributes<HTMLVideoElement>, "as" | "src">
   /**
+   * Shows the title block in the top left corner.
+   *
+   * Presentation shells that render their own programme identity can turn it
+   * off to avoid showing the same information twice.
+   *
+   * @default true
+   */
+  showTopOverlay?: boolean
+  /**
    * The player surface is always dark, the prop is kept for API parity with
    * the upstream block.
    *
@@ -82,6 +91,7 @@ export const VideoPlayer = React.forwardRef<HTMLDivElement, VideoPlayerProps>(
       layout = "aspect",
       loading,
       mediaProps,
+      showTopOverlay = true,
       source,
       sourceKey,
     },
@@ -152,17 +162,19 @@ export const VideoPlayer = React.forwardRef<HTMLDivElement, VideoPlayerProps>(
                 @5xl/root:max-w-[1728px]
               `}
             >
-              <TopOverlayContainer
-                className="
-                  px-[5%] pt-[clamp(0.75rem,7svh,4rem)] transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.25,0.46,0.45,0.94)]
-                  group-data-[idle=false]/root:translate-y-0 group-data-[idle=false]/root:opacity-100
-                  group-data-[idle=true]/root:-translate-y-4 group-data-[idle=true]/root:opacity-0 group-data-[idle=true]/root:pointer-events-none
-                  group-data-[status=buffering]/root:translate-y-0 group-data-[status=buffering]/root:opacity-100
-                  group-data-[status=error]/root:translate-y-0 group-data-[status=error]/root:opacity-100
-                  group-data-[status=paused]/root:translate-y-0 group-data-[status=paused]/root:opacity-100
-                  @3xl/root:px-[min(80px,10%)]
-                "
-              />
+              {showTopOverlay ? (
+                <TopOverlayContainer
+                  className="
+                    px-[5%] pt-[clamp(0.75rem,7svh,4rem)] transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.25,0.46,0.45,0.94)]
+                    group-data-[idle=false]/root:translate-y-0 group-data-[idle=false]/root:opacity-100
+                    group-data-[idle=true]/root:-translate-y-4 group-data-[idle=true]/root:opacity-0 group-data-[idle=true]/root:pointer-events-none
+                    group-data-[status=buffering]/root:translate-y-0 group-data-[status=buffering]/root:opacity-100
+                    group-data-[status=error]/root:translate-y-0 group-data-[status=error]/root:opacity-100
+                    group-data-[status=paused]/root:translate-y-0 group-data-[status=paused]/root:opacity-100
+                    @3xl/root:px-[min(80px,10%)]
+                  "
+                />
+              ) : null}
               <CaptionsContainer
                 className="
                   px-[5%] pb-[clamp(0.5rem,4svh,1.5rem)]
