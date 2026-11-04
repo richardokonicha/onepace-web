@@ -6,6 +6,10 @@ const allowlist = [
   /\.vmpx\.online$/,
   /\.vmnow\.online$/,
   /^onepace\.co$/,
+  // AniWixi hosts direct MP4 renditions on Cloudflare R2 behind a Referer
+  // check; the same bucket serves every One Piece episode the site publishes.
+  /^pub-[a-z0-9]+\.r2\.dev$/,
+  /^aniwixi\.xyz$/,
 ];
 
 export function isAllowed(url: string) {
