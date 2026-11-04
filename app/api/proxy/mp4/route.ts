@@ -30,6 +30,28 @@ async function tryFetch(upstream: string, range: string | null) {
   return null;
 }
 
+/**
+ * Some upstreams (notably Cloudflare R2) answer a HEAD request without a
+ * `Content-Length`, because the edge strips body headers on HEAD responses.
+ * Shaka's MP4 parser needs the size to issue its first byte-range request,
+ * so when a HEAD response is missing it we probe the total length with a
+ * single-byte range GET and reuse that value.
+ */
+async function fetchContentLength(upstream: string): Promise<number | null> {
+  const res = await tryFetch(upstream, "bytes=0-0");
+  if (!res) return null;
+  await res.body?.cancel();
+  const cr = res.headers.get("content-range") || res.headers.get("Content-Range");
+  if (cr) {
+    const total = cr.split("/")[1];
+    const n = Number(total);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  const cl = res.headers.get("content-length") || res.headers.get("Content-Length");
+  const n = Number(cl);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 async function fetchWithTimeout(url: string, headers: Record<string, string>, timeoutMs: number) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -66,6 +88,56 @@ export async function GET(req: NextRequest) {
     } catch (e: unknown) {
       return NextResponse.json({ error: errorMessage(e) }, { status: 502 });
     }
+  }
+
+  // Shaka's MP4 parser probes the size with a HEAD request before issuing
+  // byte-range GETs. Cloudflare R2 answers HEAD without a Content-Length
+  // (the edge strips body headers on HEAD), so a bare pass-through leaves
+  // Shaka with no size and it never streams. Probe the total length with a
+  // single-byte range GET when the HEAD response is missing it.
+  if (req.method === "HEAD") {
+    let res: Response | null = null;
+    for (const u of upstreamCandidates) {
+      res = await tryFetch(u, null);
+      if (res) break;
+    }
+    if (!res) return NextResponse.json({ error: "stream unavailable" }, { status: 502 });
+
+    let total: number | null = null;
+    const rawCl = res.headers.get("content-length") || res.headers.get("Content-Length");
+    const rawCr = res.headers.get("content-range") || res.headers.get("Content-Range");
+    if (rawCl) {
+      const n = Number(rawCl);
+      total = Number.isFinite(n) && n > 0 ? n : null;
+    }
+if (total === null && rawCr) {
+      const m = rawCr.split("/")[1];
+      const n = Number(m);
+      total = Number.isFinite(n) && n > 0 ? n : null;
+    }
+    if (total === null) {
+      total = await fetchContentLength(upstreamCandidates[0]);
+    }
+    if (total === null) {
+      await res.body?.cancel();
+      return NextResponse.json({ error: "stream unavailable" }, { status: 502 });
+    }
+
+    const respHeaders = new Headers();
+    respHeaders.set("Access-Control-Allow-Origin", "*");
+    respHeaders.set("Accept-Ranges", "bytes");
+    respHeaders.set("Cache-Control", "no-cache");
+    respHeaders.set("Content-Range", `bytes 0-0/${total}`);
+    const ct = res.headers.get("content-type");
+    if (ct) respHeaders.set("Content-Type", ct);
+    await res.body?.cancel();
+    // The Next.js edge runtime strips Content-Length from HEAD responses
+    // regardless of the body, so carry the size in Content-Range instead.
+    // Shaka's MP4 parser reads the size from either header.
+    return new Response(new Uint8Array(0), {
+      status: 200,
+      headers: respHeaders,
+    });
   }
 
   let res: Response | null = null;
